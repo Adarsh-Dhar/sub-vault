@@ -1,0 +1,72 @@
+'use client';
+
+import { CommitSnapshot } from '@/lib/types';
+import { formatDistanceToNow } from 'date-fns';
+import { Eye } from 'lucide-react';
+import { Button } from './ui/button';
+
+interface SnapshotTableProps {
+  snapshots: CommitSnapshot[];
+  onViewDiff: (snapshot: CommitSnapshot) => void;
+}
+
+function getStatusColor(status: string) {
+  switch (status) {
+    case 'success':
+      return 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border-emerald-200 dark:border-emerald-800';
+    case 'warning':
+      return 'bg-amber-500/10 text-amber-700 dark:text-amber-400 border-amber-200 dark:border-amber-800';
+    case 'error':
+      return 'bg-red-500/10 text-red-700 dark:text-red-400 border-red-200 dark:border-red-800';
+    default:
+      return 'bg-muted text-foreground border-border';
+  }
+}
+
+export function SnapshotTable({ snapshots, onViewDiff }: SnapshotTableProps) {
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full">
+        <thead>
+          <tr className="border-b border-border bg-muted">
+            <th className="px-6 py-3 text-left text-xs font-semibold text-foreground">Author</th>
+            <th className="px-6 py-3 text-left text-xs font-semibold text-foreground">Commit</th>
+            <th className="px-6 py-3 text-left text-xs font-semibold text-foreground">Message</th>
+            <th className="px-6 py-3 text-left text-xs font-semibold text-foreground">Changes</th>
+            <th className="px-6 py-3 text-left text-xs font-semibold text-foreground">Status</th>
+            <th className="px-6 py-3 text-left text-xs font-semibold text-foreground">Time</th>
+            <th className="px-6 py-3 text-left text-xs font-semibold text-foreground">Action</th>
+          </tr>
+        </thead>
+        <tbody>
+          {snapshots.map((snapshot) => (
+            <tr key={snapshot.id} className="border-b border-border hover:bg-muted/50 transition-colors">
+              <td className="px-6 py-4 text-sm text-foreground">{snapshot.author}</td>
+              <td className="px-6 py-4 text-sm text-muted-foreground font-mono">{snapshot.hash}</td>
+              <td className="px-6 py-4 text-sm text-foreground max-w-xs truncate">{snapshot.message}</td>
+              <td className="px-6 py-4 text-sm text-foreground font-semibold">{snapshot.changes}</td>
+              <td className="px-6 py-4">
+                <span className={`inline-block px-3 py-1 rounded-full text-xs font-medium border ${getStatusColor(snapshot.status)}`}>
+                  {snapshot.status.charAt(0).toUpperCase() + snapshot.status.slice(1)}
+                </span>
+              </td>
+              <td className="px-6 py-4 text-sm text-muted-foreground">
+                {formatDistanceToNow(snapshot.timestamp, { addSuffix: true })}
+              </td>
+              <td className="px-6 py-4">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => onViewDiff(snapshot)}
+                  className="hover:bg-primary/10 text-primary hover:text-primary"
+                >
+                  <Eye className="h-4 w-4" />
+                </Button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
