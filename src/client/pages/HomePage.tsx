@@ -1,6 +1,6 @@
+/* eslint-disable @typescript-eslint/no-floating-promises */
 'use client';
-
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { BarChart3, GitCommit, Activity } from 'lucide-react';
 import { DashboardLayout } from '../components/dashboard-layout';
 import { TopNavigation } from '../components/top-navigation';
@@ -8,7 +8,9 @@ import { StatsCard } from '../components/stats-card';
 import { SnapshotTable } from '../components/snapshot-table';
 import { CreateSnapshotModal } from '../components/create-snapshot-modal';
 import { DiffViewerDrawer } from '../components/diff-viewer-drawer';
-import { mockSnapshots, mockMetrics, mockDiffs } from '../lib/data';
+
+// Only keep metrics and diffs; REMOVE mockSnapshots
+import { mockMetrics, mockDiffs } from '../lib/data'; 
 import { CommitSnapshot } from '../lib/types';
 
 export default function Dashboard() {
@@ -16,7 +18,34 @@ export default function Dashboard() {
   const [isDiffDrawerOpen, setIsDiffDrawerOpen] = useState(false);
   const [selectedSnapshot, setSelectedSnapshot] = useState<CommitSnapshot | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
-  const [snapshots, setSnapshots] = useState(mockSnapshots);
+  
+  // Empty state for live database
+  const [snapshots, setSnapshots] = useState<CommitSnapshot[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+
+  // Fetch real data on mount
+  useEffect(() => {
+    async function fetchSnapshots() {
+      try {
+        // This matches your Hono route: app.route('/api/snapshot')
+        const response = await fetch('/api/snapshot'); 
+        if (response.ok) {
+          const data = await response.json();
+          // Convert date strings to Date objects for the UI
+          const formattedData = data.map((snap: { timestamp: string | number | Date; }) => ({
+            ...snap,
+            timestamp: new Date(snap.timestamp)
+          }));
+          setSnapshots(formattedData);
+        }
+      } catch (error) {
+        console.error('Failed to load snapshots', error);
+      } finally {
+        setIsLoading(false);
+      }
+    }
+    fetchSnapshots();
+  }, []);
 
   const filteredSnapshots = useMemo(() => {
     if (!searchQuery.trim()) return snapshots;
@@ -34,34 +63,39 @@ export default function Dashboard() {
     setIsDiffDrawerOpen(true);
   };
 
-  const handleCreateSnapshot = (data: { message: string; description: string }) => {
+  const handleCreateSnapshot = (data: { message: string; description?: string }) => {
+    const timestamp = Date.now();
+    const id = `manual_${timestamp}`;
+    const hash = String(timestamp).slice(-7);
+
     const newSnapshot: CommitSnapshot = {
-      id: String(snapshots.length + 1),
-      author: 'Current User',
-      hash: Math.random().toString(16).slice(2, 9),
+      id,
+      author: 'Manual Commit',
+      hash,
       message: data.message,
-      timestamp: new Date(),
-      changes: Math.floor(Math.random() * 100) + 10,
+      timestamp: new Date(timestamp),
+      changes: 0,
       status: 'success',
     };
-    setSnapshots([newSnapshot, ...snapshots]);
+
+    console.log('[SubVault] Manual snapshot created', newSnapshot);
+    setSnapshots((prev) => [newSnapshot, ...prev]);
+    setIsCreateModalOpen(false);
   };
 
   return (
     <DashboardLayout>
       <div className="space-y-6 sm:space-y-8">
-        {/* Header Section */}
         <div>
           <h2 className="text-2xl sm:text-3xl font-bold text-foreground">Dashboard</h2>
           <p className="text-sm sm:text-base text-muted-foreground mt-2">Monitor and manage your commit snapshots</p>
         </div>
 
-        {/* Stats Row */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-6">
           <StatsCard
             icon={BarChart3}
             title="Total Snapshots"
-            value={mockMetrics.totalSnapshots}
+            value={snapshots.length} // Live dynamic value
             subtitle="All time"
           />
           <StatsCard
@@ -78,26 +112,23 @@ export default function Dashboard() {
           />
         </div>
 
-        {/* Top Navigation */}
         <TopNavigation
           onCreateSnapshot={() => setIsCreateModalOpen(true)}
           searchQuery={searchQuery}
           onSearchChange={setSearchQuery}
         />
 
-        {/* Snapshots Table */}
         <div className="bg-card border border-border rounded-lg overflow-hidden">
           <div className="px-3 sm:px-6 py-3 sm:py-4 border-b border-border">
             <h3 className="text-base sm:text-lg font-semibold text-foreground">Recent Snapshots</h3>
             <p className="text-xs sm:text-sm text-muted-foreground mt-1">
-              {filteredSnapshots.length} of {snapshots.length} snapshots
+              {isLoading ? "Loading backups..." : `${filteredSnapshots.length} of ${snapshots.length} snapshots`}
             </p>
           </div>
           <SnapshotTable snapshots={filteredSnapshots} onViewDiff={handleViewDiff} />
         </div>
       </div>
 
-      {/* Modals and Drawers */}
       <CreateSnapshotModal
         isOpen={isCreateModalOpen}
         onClose={() => setIsCreateModalOpen(false)}

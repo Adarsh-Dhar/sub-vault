@@ -1,13 +1,15 @@
+/* eslint-disable @typescript-eslint/no-floating-promises */
 'use client';
-
-import { useMemo, useState } from 'react';
+import { useMemo, useState, useEffect } from 'react';
 import { ArrowLeft, Download } from 'lucide-react';
 import { DashboardLayout } from '../components/dashboard-layout';
 import { SnapshotTable } from '../components/snapshot-table';
 import { TopNavigation } from '../components/top-navigation';
 import { DiffViewerDrawer } from '../components/diff-viewer-drawer';
 import { Button } from '../components/ui/button';
-import { mockSnapshots, mockDiffs } from '../lib/data';
+
+// REMOVE mockSnapshots import
+import { mockDiffs } from '../lib/data';
 import { CommitSnapshot } from '../lib/types';
 import { Link } from 'react-router-dom';
 
@@ -15,13 +17,37 @@ export default function SnapshotsPage() {
   const [isDiffDrawerOpen, setIsDiffDrawerOpen] = useState(false);
   const [selectedSnapshot, setSelectedSnapshot] = useState<CommitSnapshot | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
-  const snapshots = mockSnapshots;
+  
+  const [snapshots, setSnapshots] = useState<CommitSnapshot[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+
+  // Fetch real data on mount
+  useEffect(() => {
+    async function fetchSnapshots() {
+      try {
+        const response = await fetch('/api/snapshot'); 
+        if (response.ok) {
+          const data = await response.json();
+          const formattedData = data.map((snap: { timestamp: string | number | Date; }) => ({
+            ...snap,
+            timestamp: new Date(snap.timestamp)
+          }));
+          setSnapshots(formattedData);
+        }
+      } catch (error) {
+        console.error('Failed to load snapshots', error);
+      } finally {
+        setIsLoading(false);
+      }
+    }
+    fetchSnapshots();
+  }, []);
 
   const filteredSnapshots = useMemo(() => {
     if (!searchQuery.trim()) return snapshots;
     const query = searchQuery.toLowerCase();
     return snapshots.filter(
-      (snapshot: { author: string; message: string; hash: string; }) =>
+      (snapshot) =>
         snapshot.author.toLowerCase().includes(query) ||
         snapshot.message.toLowerCase().includes(query) ||
         snapshot.hash.toLowerCase().includes(query)
@@ -36,7 +62,6 @@ export default function SnapshotsPage() {
   return (
     <DashboardLayout>
       <div className="space-y-6">
-        {/* Header with Back Button */}
         <div className="flex items-center gap-4">
           <Link to="/">
             <Button variant="ghost" size="sm" className="text-muted-foreground hover:text-foreground">
@@ -46,29 +71,25 @@ export default function SnapshotsPage() {
           </Link>
         </div>
 
-        {/* Page Title */}
         <div>
           <h1 className="text-3xl font-bold text-foreground">All Snapshots</h1>
           <p className="text-muted-foreground mt-2">Manage and browse all your commit snapshots</p>
         </div>
 
-        {/* Top Navigation with Search */}
         <TopNavigation
           onCreateSnapshot={() => {
-            // Navigate to create snapshot
             console.log('Create snapshot');
           }}
           searchQuery={searchQuery}
           onSearchChange={setSearchQuery}
         />
 
-        {/* Snapshots Table */}
         <div className="bg-card border border-border rounded-lg overflow-hidden">
           <div className="px-6 py-4 border-b border-border flex items-center justify-between">
             <div>
               <h2 className="text-lg font-semibold text-foreground">Snapshot History</h2>
               <p className="text-sm text-muted-foreground mt-1">
-                {filteredSnapshots.length} of {snapshots.length} total snapshots
+                {isLoading ? "Loading backups..." : `${filteredSnapshots.length} of ${snapshots.length} total snapshots`}
               </p>
             </div>
             <Button variant="outline" size="sm" className="flex items-center gap-2">
@@ -80,7 +101,6 @@ export default function SnapshotsPage() {
         </div>
       </div>
 
-      {/* Diff Viewer Drawer */}
       <DiffViewerDrawer
         isOpen={isDiffDrawerOpen}
         onClose={() => setIsDiffDrawerOpen(false)}

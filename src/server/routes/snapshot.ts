@@ -1,91 +1,111 @@
 import { Hono } from 'hono';
+import { redis } from '@devvit/web/server';
 
-type SnapshotStatus = 'success' | 'warning' | 'error';
+export const snapshot = new Hono();
 
-type CommitSnapshot = {
+type SnapshotListItem = {
   id: string;
   author: string;
   hash: string;
   message: string;
-  timestamp: Date;
+  timestamp: string;
   changes: number;
-  status: SnapshotStatus;
+  status: 'success' | 'warning' | 'error';
 };
 
-type CreateSnapshotBody = {
+type StoredSnapshot = {
+  id?: string;
   message?: string;
+  data?: Record<string, unknown>;
+  createdAt?: string;
 };
 
-const mockSnapshots: CommitSnapshot[] = [
-  {
-    id: '1',
-    author: 'Alex Chen',
-    hash: 'a3f2b1c',
-    message: 'feat: Add user authentication module',
-    timestamp: new Date('2024-05-06T14:30:00'),
-    changes: 48,
-    status: 'success',
-  },
-  {
-    id: '2',
-    author: 'Sarah Johnson',
-    hash: 'f8e4d2a',
-    message: 'fix: Resolve database connection timeout issue',
-    timestamp: new Date('2024-05-05T10:15:00'),
-    changes: 12,
-    status: 'success',
-  },
-  {
-    id: '3',
-    author: 'Mike Rodriguez',
-    hash: '5c9b3e1',
-    message: 'refactor: Optimize API response handling',
-    timestamp: new Date('2024-05-04T16:45:00'),
-    changes: 35,
-    status: 'warning',
-  },
-];
-
-export const snapshot = new Hono();
-
-snapshot.get('/', (c) => {
-  const search = c.req.query('search')?.toLowerCase().trim();
-
-  if (!search) {
-    return c.json(mockSnapshots);
+function parseStoredSnapshot(raw: string): StoredSnapshot | null {
+  const parsed: unknown = JSON.parse(raw);
+  if (typeof parsed !== 'object' || parsed === null) {
+    return null;
   }
 
-  const results = mockSnapshots.filter(
-    (item) =>
-      item.author.toLowerCase().includes(search) ||
-      item.message.toLowerCase().includes(search) ||
-      item.hash.toLowerCase().includes(search)
-  );
+  const candidate = parsed;
+  const snapshot: StoredSnapshot = {};
 
-  return c.json(results);
-});
+  if ('id' in candidate && typeof candidate.id === 'string') {
+    snapshot.id = candidate.id;
+  }
 
-snapshot.post('/', async (c) => {
+  if ('message' in candidate && typeof candidate.message === 'string') {
+    snapshot.message = candidate.message;
+  }
+
+  if ('createdAt' in candidate && typeof candidate.createdAt === 'string') {
+    snapshot.createdAt = candidate.createdAt;
+  }
+
+  if (
+    'data' in candidate &&
+    typeof candidate.data === 'object' &&
+    candidate.data !== null
+  ) {
+    snapshot.data = Object.fromEntries(Object.entries(candidate.data));
+  }
+
+  return snapshot;
+}
+
+snapshot.get('/', async (c) => {
   try {
-    const body = await c.req.json<CreateSnapshotBody>();
-    const message = typeof body.message === 'string' ? body.message.trim() : '';
+    const snapshotMap = await redis.hGetAll('snapshot_backups');
+    const snapshotsRaw = Object.values(snapshotMap);
 
-    if (!message) {
-      return c.json({ error: 'Message is required' }, 400);
+    if (snapshotsRaw.length === 0) {
+      return c.json([]);
     }
 
-    const newSnapshot: CommitSnapshot = {
-      id: String(Date.now()),
-      author: 'API User',
-      hash: Math.random().toString(16).slice(2, 9),
-      message,
-      timestamp: new Date(),
-      changes: Math.floor(Math.random() * 100) + 10,
-      status: 'success',
-    };
+    const snapshots: SnapshotListItem[] = [];
 
-    return c.json(newSnapshot, 201);
-  } catch {
-    return c.json({ error: 'Failed to create snapshot' }, 500);
+    for (const raw of snapshotsRaw) {
+      try {
+        const parsed = parseStoredSnapshot(raw);
+        if (!parsed) {
+          continue;
+        }
+
+        const snapshotId = parsed.id ?? 'unknown';
+        const message = parsed.message ?? 'Snapshot created';
+        const timestampRaw = snapshotId.replace(/\D/g, '');
+        const fallbackTimestamp =
+          timestampRaw.length > 0
+            ? new Date(Number.parseInt(timestampRaw, 10)).toISOString()
+            : new Date(0).toISOString();
+
+        let author = 'Manual Commit';
+        if (message.includes('Triggered by')) {
+          const match = message.match(/Triggered by (.+?) via/);
+          const matchedAuthor = match?.[1];
+          author = matchedAuthor ?? 'System Mod';
+        }
+
+        snapshots.push({
+          id: snapshotId,
+          author,
+          hash: timestampRaw.slice(-7),
+          message,
+          timestamp: parsed.createdAt ?? fallbackTimestamp,
+          changes: Object.keys(parsed.data ?? {}).length,
+          status: 'success',
+        });
+      } catch (error) {
+        console.error('[SubVault] Failed to parse stored snapshot payload:', error);
+      }
+    }
+
+    snapshots.sort(
+      (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+    );
+
+    return c.json(snapshots);
+  } catch (error) {
+    console.error('[SubVault] Failed to fetch snapshots:', error);
+    return c.json({ error: 'Failed to fetch snapshots' }, 500);
   }
 });
