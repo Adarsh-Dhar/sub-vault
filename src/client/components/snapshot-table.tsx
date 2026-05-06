@@ -25,48 +25,90 @@ function getStatusColor(status: string) {
 
 export function SnapshotTable({ snapshots, onViewDiff }: SnapshotTableProps) {
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full">
-        <thead>
-          <tr className="border-b border-border bg-muted">
-            <th className="px-6 py-3 text-left text-xs font-semibold text-foreground">Author</th>
-            <th className="px-6 py-3 text-left text-xs font-semibold text-foreground">Commit</th>
-            <th className="px-6 py-3 text-left text-xs font-semibold text-foreground">Message</th>
-            <th className="px-6 py-3 text-left text-xs font-semibold text-foreground">Changes</th>
-            <th className="px-6 py-3 text-left text-xs font-semibold text-foreground">Status</th>
-            <th className="px-6 py-3 text-left text-xs font-semibold text-foreground">Time</th>
-            <th className="px-6 py-3 text-left text-xs font-semibold text-foreground">Action</th>
-          </tr>
-        </thead>
-        <tbody>
-          {snapshots.map((snapshot) => (
-            <tr key={snapshot.id} className="border-b border-border hover:bg-muted/50 transition-colors">
-              <td className="px-6 py-4 text-sm text-foreground">{snapshot.author}</td>
-              <td className="px-6 py-4 text-sm text-muted-foreground font-mono">{snapshot.hash}</td>
-              <td className="px-6 py-4 text-sm text-foreground max-w-xs truncate">{snapshot.message}</td>
-              <td className="px-6 py-4 text-sm text-foreground font-semibold">{snapshot.changes}</td>
-              <td className="px-6 py-4">
-                <span className={`inline-block px-3 py-1 rounded-full text-xs font-medium border ${getStatusColor(snapshot.status)}`}>
-                  {snapshot.status.charAt(0).toUpperCase() + snapshot.status.slice(1)}
-                </span>
-              </td>
-              <td className="px-6 py-4 text-sm text-muted-foreground">
-                {formatDistanceToNow(snapshot.timestamp, { addSuffix: true })}
-              </td>
-              <td className="px-6 py-4">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => onViewDiff(snapshot)}
-                  className="hover:bg-primary/10 text-primary hover:text-primary"
-                >
-                  <Eye className="h-4 w-4" />
-                </Button>
-              </td>
+    <>
+      {/* Desktop Table View */}
+      <div className="hidden md:block overflow-x-auto">
+        <table className="w-full">
+          <thead>
+            <tr className="border-b border-border bg-muted">
+              <th className="px-6 py-3 text-left text-xs font-semibold text-foreground">Author</th>
+              <th className="px-6 py-3 text-left text-xs font-semibold text-foreground">Commit</th>
+              <th className="px-6 py-3 text-left text-xs font-semibold text-foreground">Message</th>
+              <th className="px-6 py-3 text-left text-xs font-semibold text-foreground">Changes</th>
+              <th className="px-6 py-3 text-left text-xs font-semibold text-foreground">Status</th>
+              <th className="px-6 py-3 text-left text-xs font-semibold text-foreground">Time</th>
+              <th className="px-6 py-3 text-left text-xs font-semibold text-foreground">Action</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+          </thead>
+          <tbody>
+            {snapshots.map((snapshot) => (
+              <tr key={snapshot.id} className="border-b border-border hover:bg-muted/50 transition-colors">
+                <td className="px-6 py-4 text-sm text-foreground">{snapshot.author}</td>
+                <td className="px-6 py-4 text-sm text-muted-foreground font-mono">{snapshot.hash}</td>
+                <td className="px-6 py-4 text-sm text-foreground max-w-xs truncate">{snapshot.message}</td>
+                <td className="px-6 py-4 text-sm text-foreground font-semibold">{snapshot.changes}</td>
+                <td className="px-6 py-4">
+                  <span className={`inline-block px-3 py-1 rounded-full text-xs font-medium border ${getStatusColor(snapshot.status)}`}>
+                    {snapshot.status.charAt(0).toUpperCase() + snapshot.status.slice(1)}
+                  </span>
+                </td>
+                <td className="px-6 py-4 text-sm text-muted-foreground">
+                  {formatDistanceToNow(snapshot.timestamp, { addSuffix: true })}
+                </td>
+                <td className="px-6 py-4">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => onViewDiff(snapshot)}
+                    className="hover:bg-primary/10 text-primary hover:text-primary"
+                  >
+                    <Eye className="h-4 w-4" />
+                  </Button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Mobile Card View */}
+      <div className="md:hidden space-y-3">
+        {snapshots.map((snapshot) => (
+          <div
+            key={snapshot.id}
+            className="p-4 rounded-lg border border-border bg-card hover:border-primary/50 transition-colors"
+          >
+            <div className="flex items-start justify-between gap-3 mb-3">
+              <div>
+                <p className="font-semibold text-foreground text-sm">{snapshot.author}</p>
+                <p className="text-xs text-muted-foreground font-mono">{snapshot.hash.slice(0, 8)}</p>
+              </div>
+              <span className={`inline-block px-2 py-1 rounded-full text-xs font-medium border flex-shrink-0 ${getStatusColor(snapshot.status)}`}>
+                {snapshot.status.charAt(0).toUpperCase() + snapshot.status.slice(1)}
+              </span>
+            </div>
+
+            <p className="text-sm text-foreground mb-2 line-clamp-2">{snapshot.message}</p>
+
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                <span>{snapshot.changes} changes</span>
+                <span>{formatDistanceToNow(snapshot.timestamp, { addSuffix: true })}</span>
+              </div>
+            </div>
+
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => onViewDiff(snapshot)}
+              className="w-full flex items-center justify-center gap-2"
+            >
+              <Eye className="h-4 w-4" />
+              View Diff
+            </Button>
+          </div>
+        ))}
+      </div>
+    </>
   );
 }

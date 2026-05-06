@@ -49,15 +49,15 @@ export default function Dashboard() {
 
   return (
     <DashboardLayout>
-      <div className="space-y-8">
+      <div className="space-y-6 sm:space-y-8">
         {/* Header Section */}
         <div>
-          <h2 className="text-3xl font-bold text-foreground">Dashboard</h2>
-          <p className="text-muted-foreground mt-2">Monitor and manage your commit snapshots</p>
+          <h2 className="text-2xl sm:text-3xl font-bold text-foreground">Dashboard</h2>
+          <p className="text-sm sm:text-base text-muted-foreground mt-2">Monitor and manage your commit snapshots</p>
         </div>
 
         {/* Stats Row */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-6">
           <StatsCard
             icon={BarChart3}
             title="Total Snapshots"
@@ -87,9 +87,9 @@ export default function Dashboard() {
 
         {/* Snapshots Table */}
         <div className="bg-card border border-border rounded-lg overflow-hidden">
-          <div className="px-6 py-4 border-b border-border">
-            <h3 className="text-lg font-semibold text-foreground">Recent Snapshots</h3>
-            <p className="text-sm text-muted-foreground mt-1">
+          <div className="px-3 sm:px-6 py-3 sm:py-4 border-b border-border">
+            <h3 className="text-base sm:text-lg font-semibold text-foreground">Recent Snapshots</h3>
+            <p className="text-xs sm:text-sm text-muted-foreground mt-1">
               {filteredSnapshots.length} of {snapshots.length} snapshots
             </p>
           </div>
