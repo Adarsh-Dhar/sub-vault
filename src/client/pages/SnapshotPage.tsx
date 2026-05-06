@@ -63,11 +63,11 @@ export default function SnapshotsPage() {
         />
 
         {/* Snapshots Table */}
-        <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
-          <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
+        <div className="bg-card border border-border rounded-lg overflow-hidden">
+          <div className="px-6 py-4 border-b border-border flex items-center justify-between">
             <div>
-              <h2 className="text-lg font-semibold text-gray-900">Snapshot History</h2>
-              <p className="text-sm text-gray-600 mt-1">
+              <h2 className="text-lg font-semibold text-foreground">Snapshot History</h2>
+              <p className="text-sm text-muted-foreground mt-1">
                 {filteredSnapshots.length} of {snapshots.length} total snapshots
               </p>
             </div>

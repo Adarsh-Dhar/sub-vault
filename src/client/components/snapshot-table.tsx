@@ -27,8 +27,8 @@ export function SnapshotTable({ snapshots, onViewDiff }: SnapshotTableProps) {
   return (
     <>
       {/* Desktop Table View */}
-      <div className="hidden md:block overflow-x-auto">
-        <table className="w-full">
+      <div className="hidden md:block overflow-x-auto bg-card text-foreground">
+        <table className="w-full bg-card text-foreground">
           <thead>
             <tr className="border-b border-border bg-muted">
               <th className="px-6 py-3 text-left text-xs font-semibold text-foreground">Author</th>
@@ -83,7 +83,7 @@ export function SnapshotTable({ snapshots, onViewDiff }: SnapshotTableProps) {
                 <p className="font-semibold text-foreground text-sm">{snapshot.author}</p>
                 <p className="text-xs text-muted-foreground font-mono">{snapshot.hash.slice(0, 8)}</p>
               </div>
-              <span className={`inline-block px-2 py-1 rounded-full text-xs font-medium border flex-shrink-0 ${getStatusColor(snapshot.status)}`}>
+              <span className={`inline-block px-2 py-1 rounded-full text-xs font-medium border shrink-0 ${getStatusColor(snapshot.status)}`}>
                 {snapshot.status.charAt(0).toUpperCase() + snapshot.status.slice(1)}
               </span>
             </div>
