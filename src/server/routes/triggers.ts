@@ -21,11 +21,39 @@ const MOD_ACTIONS_TO_TRACK = new Set([
   'create_removal_reason',
   'edit_removal_reason',
   'delete_removal_reason',
+  'wikirevise',
+  'wikipagelisted',
+  'wikibanned',
+  'wikiunbanned',
+  'approvelink',
+  'removelink',
+  'approvecomment',
+  'removecomment',
+  'banuser',
+  'unbanuser',
+  'muteuser',
+  'unmuteuser',
+  'addmoderator',
+  'invitemoderator',
+  'removemoderator',
+  'acceptmoderatorinvite',
+  'sticky',
+  'unsticky',
+  'distinguish',
+  'marknsfw',
+  'unmarknsfw',
+  'spoiler',
+  'unspoiler',
+  'lock',
+  'unlock',
+  'addcontributor',
+  'removecontributor',
 ]);
 
 const ACTION_LABELS: Record<string, string> = {
   community_settings: 'Community Settings changed',
-  wiki_revise: 'Automod YAML updated',
+  wiki_revise: 'Wiki page updated',
+  wikirevise: 'Wiki page updated',
   create_rule: 'Rule created',
   edit_rule: 'Rule edited',
   delete_rule: 'Rule deleted',
@@ -35,26 +63,196 @@ const ACTION_LABELS: Record<string, string> = {
   create_removal_reason: 'Removal reason created',
   edit_removal_reason: 'Removal reason edited',
   delete_removal_reason: 'Removal reason deleted',
+  banuser: 'User banned',
+  unbanuser: 'User unbanned',
+  muteuser: 'User muted',
+  unmuteuser: 'User unmuted',
+  addmoderator: 'Moderator added',
+  removemoderator: 'Moderator removed',
+  approvelink: 'Post approved',
+  removelink: 'Post removed',
+  approvecomment: 'Comment approved',
+  removecomment: 'Comment removed',
+  sticky: 'Post stickied',
+  unsticky: 'Post unstickied',
+  lock: 'Thread locked',
+  unlock: 'Thread unlocked',
+  marknsfw: 'Marked NSFW',
+  unmarknsfw: 'Unmarked NSFW',
+  addcontributor: 'Approved user added',
+  removecontributor: 'Approved user removed',
 };
 
-type StoredSnapshot = {
-  id: string;
-  message: string;
-  data: {
-    rules: unknown;
-    settings: unknown | null;
-    postFlairs: unknown;
-    userFlairs?: unknown;
-    widgets?: unknown | null;
-    removalReasons?: unknown;
-    automoderator: string;
-    eventContext: {
-      action: string;
-      targetId: string | undefined;
-    };
-  };
-  createdAt: string;
+// Safe fetch wrapper
+const safeFetch = async <T>(fn: () => Promise<T>, fallback: T): Promise<T> => {
+  try {
+    return await fn();
+  } catch (err) {
+    console.warn('[SubVault] safeFetch fallback:', String(err).slice(0, 100));
+    return fallback;
+  }
 };
+
+export async function captureFullCommunitySnapshot(subredditName: string) {
+  console.log(`[SubVault] Fetching full community snapshot for r/${subredditName}`);
+
+  // Fetch all available data concurrently with safe fallbacks
+  const [
+    rulesResult,
+    infoResult,
+    postFlairsResult,
+    userFlairsResult,
+    widgetsResult,
+    removalReasonsResult,
+    wikiPagesResult,
+    bannedUsersResult,
+    mutedUsersResult,
+    approvedUsersResult,
+    moderatorsResult,
+  ] = await Promise.all([
+    // Rules
+    safeFetch(() => reddit.getRules(subredditName), []),
+    // Subreddit info (type, nsfw, description, title, etc.)
+    safeFetch(() => reddit.getSubredditInfoByName(subredditName), null),
+    // Post flair templates
+    safeFetch(() => reddit.getPostFlairTemplates(subredditName), []),
+    // User flair templates
+    safeFetch(() => reddit.getUserFlairTemplates(subredditName), []),
+    // Sidebar widgets
+    safeFetch(() => reddit.getWidgets(subredditName), null),
+    // Removal reasons
+    safeFetch(() => reddit.getSubredditRemovalReasons(subredditName), []),
+    // Wiki pages list
+    safeFetch(() => reddit.getWikiPages(subredditName), []),
+    // Banned users (first page)
+    safeFetch(async () => {
+      const listing = reddit.getBannedUsers({ subredditName, limit: 100 });
+      const users = [];
+      for await (const u of listing) {
+        users.push({ username: u.username, note: (u as unknown as Record<string, unknown>).banNote ?? '' });
+        if (users.length >= 100) break;
+      }
+      return users;
+    }, []),
+    // Muted users
+    safeFetch(async () => {
+      const listing = reddit.getMutedUsers({ subredditName, limit: 100 });
+      const users = [];
+      for await (const u of listing) {
+        users.push({ username: u.username });
+        if (users.length >= 100) break;
+      }
+      return users;
+    }, []),
+    // Approved (contributor) users
+    safeFetch(async () => {
+      const listing = reddit.getApprovedUsers({ subredditName, limit: 100 });
+      const users = [];
+      for await (const u of listing) {
+        users.push({ username: u.username });
+        if (users.length >= 100) break;
+      }
+      return users;
+    }, []),
+    // Moderators
+    safeFetch(async () => {
+      const listing = reddit.getModerators({ subredditName });
+      const mods = [];
+      for await (const m of listing) {
+        mods.push({ username: m.username, permissions: (m as unknown as Record<string, unknown>).permissions ?? [] });
+        if (mods.length >= 100) break;
+      }
+      return mods;
+    }, []),
+  ]);
+
+  // Automod wiki — separate because it 404s if not configured
+  let automodConfig = 'Not configured';
+  try {
+    const automodWiki = await reddit.getWikiPage(subredditName, 'config/automoderator');
+    automodConfig = automodWiki.content;
+  } catch {
+    console.log('[SubVault] No automoderator config found.');
+  }
+
+  // Subreddit settings (content controls, safety filters, etc.)
+  let subredditSettings: Record<string, unknown> | null = null;
+  try {
+    const settings = await reddit.getSubredditStyles(context.subredditId);
+    subredditSettings = settings as unknown as Record<string, unknown>;
+  } catch (err) {
+    console.warn('[SubVault] Could not fetch subreddit settings:', String(err).slice(0, 100));
+  }
+
+  // Build identity block from info
+  // Log infoResult for debugging to ensure correct field mapping
+  if (infoResult) {
+    try {
+      console.log('[SubVault] Subreddit infoResult:', JSON.stringify(infoResult, null, 2));
+    } catch (err) {
+      console.log('[SubVault] Subreddit infoResult (inspect):', infoResult);
+    }
+  }
+
+  const identity = infoResult
+    ? (() => {
+        const info = infoResult as Record<string, any>;
+        // Some API shapes use `over18` for NSFW, others use `nsfw`.
+        const nsfwFlag = typeof info.over18 === 'boolean' ? info.over18 : info.nsfw ?? false;
+        return {
+          displayName: info.name ?? subredditName,
+          title: info.title ?? '',
+          description: info.description ?? '',
+          publicDescription: info.publicDescription ?? '',
+          subredditType: info.subredditType ?? '',
+          nsfw: nsfwFlag,
+          subscribers: info.subscribers ?? 0,
+          createdAt: info.createdAt ?? '',
+          url: info.url ?? '',
+          lang: info.lang ?? 'en',
+          allowGalleries: info.allowGalleries ?? null,
+          allowImages: info.allowImages ?? null,
+          allowVideos: info.allowVideos ?? null,
+          allowPolls: info.allowPolls ?? null,
+          communityIcon: info.communityIcon ?? '',
+          bannerBackgroundImage: info.bannerBackgroundImage ?? '',
+          bannerImg: info.bannerImg ?? '',
+          keyColor: info.keyColor ?? '',
+          primaryColor: info.primaryColor ?? '',
+          iconColor: info.iconColor ?? '',
+        };
+      })()
+    : null;
+
+  return {
+    identity,
+    settings: subredditSettings,
+    rules: rulesResult ?? [],
+    removalReasons: removalReasonsResult ?? [],
+    flairs: {
+      post: postFlairsResult ?? [],
+      user: userFlairsResult ?? [],
+    },
+    widgets: widgetsResult,
+    automoderator: automodConfig,
+    wikiPages: wikiPagesResult ?? [],
+    userManagement: {
+      banned: bannedUsersResult,
+      muted: mutedUsersResult,
+      approved: approvedUsersResult,
+      moderators: moderatorsResult,
+    },
+    capturedAt: new Date().toISOString(),
+    limitations: {
+      cssStylesheet: 'Not available via Devvit API',
+      emojis: 'Not available via Devvit API',
+      chatChannels: 'Not available via Devvit API',
+      modNotes: 'Not available via Devvit API',
+      safetyFilters: 'Not directly exposed via Devvit API — partially in settings',
+      banEventsHistory: 'Not available via Devvit API',
+    },
+  };
+}
 
 triggers.post('/on-app-install', async (c) => {
   try {
@@ -71,10 +269,7 @@ triggers.post('/on-app-install', async (c) => {
   } catch (error) {
     console.error(`Error creating post: ${error}`);
     return c.json<TriggerResponse>(
-      {
-        status: 'error',
-        message: 'Failed to create post',
-      },
+      { status: 'error', message: 'Failed to create post' },
       400
     );
   }
@@ -86,12 +281,10 @@ triggers.post('/on-mod-action', async (c) => {
   const moderator = input.moderator?.name ?? 'Unknown Moderator';
   const targetId = input.targetPost?.id ?? input.targetComment?.id;
 
-  console.log(
-    `[SubVault] ModAction received action=${action} moderator=${moderator} target=${targetId ?? 'none'} subreddit=${context.subredditName ?? 'unknown'}`
-  );
+  console.log(`[SubVault] ModAction action=${action} moderator=${moderator}`);
 
   if (!MOD_ACTIONS_TO_TRACK.has(action)) {
-    console.log(`[SubVault] Ignoring untracked ModAction action=${action}`);
+    console.log(`[SubVault] Ignoring untracked action=${action}`);
     return c.json<TriggerResponse>({}, 200);
   }
 
@@ -99,97 +292,41 @@ triggers.post('/on-mod-action', async (c) => {
   const id = `auto_${timestamp}`;
   const label = ACTION_LABELS[action] ?? action;
 
-  console.log(
-    `[SubVault] Tracked ModAction detected action=${action} label="${label}" snapshot=${id} - fetching live subreddit context`
-  );
-
   try {
     const subredditName = context.subredditName;
+    const communityData = await captureFullCommunitySnapshot(subredditName);
 
-    // Safe fetch wrapper: ensures one failing call doesn't reject the whole snapshot
-    const safeFetch = async <T>(fn: () => Promise<T>, fallback: T): Promise<T> => {
-      try {
-        return await fn();
-      } catch (err) {
-        console.warn('[SubVault] safeFetch fallback due to error:', String(err));
-        return fallback;
-      }
-    };
-
-    // Fetch a broad set of subreddit data concurrently, with fallbacks
-    const [
-      rules,
-      info,
-      postFlairs,
-      userFlairs,
-      widgets,
-      removalReasons,
-    ] = await Promise.all([
-      safeFetch(() => reddit.getRules(subredditName), []),
-      safeFetch(() => reddit.getSubredditInfoByName(subredditName), null),
-      safeFetch(() => reddit.getPostFlairTemplates(subredditName), []),
-      safeFetch(() => reddit.getUserFlairTemplates(subredditName), []),
-      safeFetch(() => reddit.getWidgets(subredditName), null),
-      safeFetch(() => reddit.getSubredditRemovalReasons(subredditName), []),
-    ]);
-
-    // Automod wiki fetch may 404 — keep separate try/catch for clarity
-    let automod = 'Not configured';
-    try {
-      const automodWiki = await reddit.getWikiPage(subredditName, 'config/automoderator');
-      automod = automodWiki.content;
-    } catch (error) {
-      console.log(`[SubVault] Automoderator wiki unavailable snapshot=${id}; continuing.`);
-    }
-
-    const snapshot: StoredSnapshot = {
+    const snapshot = {
       id,
-      message: `Auto-Backup: ${label} - Triggered by ${moderator} via ModAction`,
+      message: `Auto-Backup: ${label} — by ${moderator}`,
       data: {
-        rules: rules ?? [],
-        settings: info ?? null,
-        postFlairs,
-        userFlairs,
-        widgets,
-        removalReasons,
-        automoderator: automod,
-        eventContext: { action, targetId },
+        ...communityData,
+        eventContext: { action, label, targetId, moderator },
       },
       createdAt: new Date(timestamp).toISOString(),
     };
 
-    // Avoid hitting per-value size limits: warn if payload is large and store truncated automod as needed
-    const payloadStr = JSON.stringify(snapshot);
-    const sizeBytes = typeof Buffer !== 'undefined' ? Buffer.byteLength(payloadStr, 'utf8') : payloadStr.length;
-    if (sizeBytes > 100 * 1024) {
-      console.warn(`[SubVault] Snapshot payload ${id} is large (${sizeBytes} bytes). Truncating automod and widgets for storage.`);
-      // Truncate automod and widgets to keep payload smaller
-      const truncatedSnapshot = { ...snapshot } as StoredSnapshot;
-      if (truncatedSnapshot.data && typeof truncatedSnapshot.data.automoderator === 'string') {
-        truncatedSnapshot.data.automoderator = (truncatedSnapshot.data.automoderator as string).slice(0, 90 * 1024);
-      }
-      if (truncatedSnapshot.data) {
-        truncatedSnapshot.data.widgets = null;
-      }
-      const serializedTruncated = JSON.stringify(truncatedSnapshot);
-      await Promise.all([
-        redis.set(id, serializedTruncated),
-        redis.zAdd('all_snapshots', { member: id, score: timestamp })
-      ]);
-    } else {
-      await Promise.all([
-        redis.set(id, payloadStr),
-        redis.zAdd('all_snapshots', { member: id, score: timestamp })
-      ]);
+    let payloadStr = JSON.stringify(snapshot);
+    const sizeBytes = payloadStr.length;
+
+    // If over 95KB, truncate automod first, then remove banned users list
+    if (sizeBytes > 95 * 1024) {
+      console.warn(`[SubVault] Payload too large (${sizeBytes}B), truncating...`);
+      snapshot.data.automoderator = snapshot.data.automoderator.slice(0, 10000) + '\n... [truncated]';
+      snapshot.data.userManagement.banned = snapshot.data.userManagement.banned.slice(0, 20);
+      snapshot.data.userManagement.approved = snapshot.data.userManagement.approved.slice(0, 20);
+      payloadStr = JSON.stringify(snapshot);
     }
 
-    console.log(`[SubVault] Auto snapshot saved successfully snapshot=${id} size=${sizeBytes}`);
+    await Promise.all([
+      redis.set(`snapshot:${id}`, payloadStr),
+      redis.hSet('snapshot_backups', { [id]: payloadStr }),
+    ]);
+
+    console.log(`[SubVault] Auto snapshot saved id=${id} size=${payloadStr.length}B`);
     return c.json<TriggerResponse>({}, 200);
   } catch (error) {
-    console.error(
-      `[SubVault] Failed to fetch or save auto snapshot for action=${action}:`,
-      error
-    );
+    console.error(`[SubVault] Failed to save auto snapshot:`, error);
     return c.json<TriggerResponse>({}, 200);
   }
 });

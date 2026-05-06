@@ -8,6 +8,7 @@ import { Button } from './ui/button';
 interface SnapshotTableProps {
   snapshots: CommitSnapshot[];
   onViewDiff: (snapshot: CommitSnapshot) => void;
+  onViewDetails?: (snapshot: CommitSnapshot) => void;
 }
 
 function getStatusColor(status: string) {
@@ -23,7 +24,7 @@ function getStatusColor(status: string) {
   }
 }
 
-export function SnapshotTable({ snapshots, onViewDiff }: SnapshotTableProps) {
+export function SnapshotTable({ snapshots, onViewDiff, onViewDetails }: SnapshotTableProps) {
   return (
     <>
       {/* Desktop Table View */}
@@ -45,7 +46,12 @@ export function SnapshotTable({ snapshots, onViewDiff }: SnapshotTableProps) {
               <tr key={snapshot.id} className="border-b border-border hover:bg-muted/50 transition-colors">
                 <td className="px-6 py-4 text-sm text-foreground">{snapshot.author}</td>
                 <td className="px-6 py-4 text-sm text-muted-foreground font-mono">{snapshot.hash}</td>
-                <td className="px-6 py-4 text-sm text-foreground max-w-xs truncate">{snapshot.message}</td>
+                <td
+                  className="px-6 py-4 text-sm text-primary max-w-xs truncate cursor-pointer hover:underline"
+                  onClick={() => onViewDetails?.(snapshot)}
+                >
+                  {snapshot.message}
+                </td>
                 <td className="px-6 py-4 text-sm text-foreground font-semibold">{snapshot.changes}</td>
                 <td className="px-6 py-4">
                   <span className={`inline-block px-3 py-1 rounded-full text-xs font-medium border ${getStatusColor(snapshot.status)}`}>
@@ -88,7 +94,12 @@ export function SnapshotTable({ snapshots, onViewDiff }: SnapshotTableProps) {
               </span>
             </div>
 
-            <p className="text-sm text-foreground mb-2 line-clamp-2">{snapshot.message}</p>
+            <p
+              className="text-sm text-primary mb-2 line-clamp-2 cursor-pointer hover:underline"
+              onClick={() => onViewDetails?.(snapshot)}
+            >
+              {snapshot.message}
+            </p>
 
             <div className="flex items-center justify-between mb-3">
               <div className="flex items-center gap-3 text-xs text-muted-foreground">
@@ -97,15 +108,25 @@ export function SnapshotTable({ snapshots, onViewDiff }: SnapshotTableProps) {
               </div>
             </div>
 
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => onViewDiff(snapshot)}
-              className="w-full flex items-center justify-center gap-2"
-            >
-              <Eye className="h-4 w-4" />
-              View Diff
-            </Button>
+            <div className="flex gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => onViewDetails?.(snapshot)}
+                className="flex-1"
+              >
+                Details
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => onViewDiff(snapshot)}
+                className="flex-1 flex items-center justify-center gap-2"
+              >
+                <Eye className="h-4 w-4" />
+                Diff
+              </Button>
+            </div>
           </div>
         ))}
       </div>

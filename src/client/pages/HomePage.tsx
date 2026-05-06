@@ -8,14 +8,17 @@ import { StatsCard } from '../components/stats-card';
 import { SnapshotTable } from '../components/snapshot-table';
 import { CreateSnapshotModal } from '../components/create-snapshot-modal';
 import { DiffViewerDrawer } from '../components/diff-viewer-drawer';
+import { SnapshotDetailModal } from '../components/snapshot-detail-modal';
 
 import { mockMetrics, mockDiffs } from '../lib/data';
-import { CommitSnapshot } from '../lib/types';
+import { CommitSnapshot, SnapshotDetail } from '../lib/types';
 
 export default function Dashboard() {
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [isDiffDrawerOpen, setIsDiffDrawerOpen] = useState(false);
+  const [isDetailModalOpen, setIsDetailModalOpen] = useState(false);
   const [selectedSnapshot, setSelectedSnapshot] = useState<CommitSnapshot | null>(null);
+  const [selectedDetail, setSelectedDetail] = useState<SnapshotDetail | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [snapshots, setSnapshots] = useState<CommitSnapshot[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -55,6 +58,26 @@ export default function Dashboard() {
   const handleViewDiff = (snapshot: CommitSnapshot) => {
     setSelectedSnapshot(snapshot);
     setIsDiffDrawerOpen(true);
+  };
+
+  const handleViewDetails = async (snapshot: CommitSnapshot) => {
+    try {
+      const response = await fetch(`/api/snapshot/${snapshot.id}`);
+      if (response.ok) {
+        const data = await response.json();
+          console.log('[SubVault] Snapshot detail fetched (client):', data);
+        const detailSnapshot: SnapshotDetail = {
+          ...data,
+          timestamp: new Date(data.timestamp),
+        };
+        setSelectedDetail(detailSnapshot);
+        setIsDetailModalOpen(true);
+      } else {
+        console.error('[SubVault] Failed to fetch snapshot details:', response.status);
+      }
+    } catch (error) {
+      console.error('[SubVault] Error fetching snapshot details:', error);
+    }
   };
 
   const handleCreateSnapshot = async (data: { message: string; description?: string }) => {
@@ -129,7 +152,7 @@ export default function Dashboard() {
                 : `${filteredSnapshots.length} of ${snapshots.length} snapshots`}
             </p>
           </div>
-          <SnapshotTable snapshots={filteredSnapshots} onViewDiff={handleViewDiff} />
+          <SnapshotTable snapshots={filteredSnapshots} onViewDiff={handleViewDiff} onViewDetails={handleViewDetails} />
         </div>
       </div>
 
@@ -143,6 +166,11 @@ export default function Dashboard() {
         onClose={() => setIsDiffDrawerOpen(false)}
         snapshot={selectedSnapshot}
         diffs={mockDiffs}
+      />
+      <SnapshotDetailModal
+        isOpen={isDetailModalOpen}
+        onClose={() => setIsDetailModalOpen(false)}
+        snapshot={selectedDetail}
       />
     </DashboardLayout>
   );

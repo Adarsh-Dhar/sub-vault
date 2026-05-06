@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
-import { redis } from '@devvit/web/server';
+import { redis, context } from '@devvit/web/server';
+import { captureFullCommunitySnapshot } from './triggers';
 
 export const snapshot = new Hono();
 
@@ -123,10 +124,20 @@ snapshot.post('/', async (c) => {
     const timestamp = Date.now();
     const id = `manual_${timestamp}`;
 
+    // Capture full community state
+    const subredditName = context.subredditName;
+    let communityData: Record<string, unknown> | null = null;
+    try {
+      communityData = (await captureFullCommunitySnapshot(subredditName)) as unknown as Record<string, unknown>;
+    } catch (err) {
+      console.warn('[SubVault] Failed to capture community snapshot data:', String(err).slice(0, 100));
+      // Continue with basic snapshot if capture fails
+    }
+
     const stored = {
       id,
       message,
-      data: { description: body.description ?? '' },
+      data: communityData ?? { description: body.description ?? '' },
       createdAt: new Date(timestamp).toISOString(),
     };
 
@@ -143,7 +154,7 @@ snapshot.post('/', async (c) => {
       hash: String(timestamp).slice(-7),
       message,
       timestamp: stored.createdAt,
-      changes: 0,
+      changes: Object.keys(stored.data).length,
       status: 'success',
     };
 
@@ -152,5 +163,58 @@ snapshot.post('/', async (c) => {
   } catch (error) {
     console.error('[SubVault] Failed to save manual snapshot:', error);
     return c.json({ error: 'Failed to save snapshot' }, 500);
+  }
+});
+
+// GET /:id — retrieve full snapshot detail by ID
+snapshot.get('/:id', async (c) => {
+  try {
+    const id = c.req.param('id');
+    const raw = await redis.get(`snapshot:${id}`);
+
+    if (!raw) {
+      return c.json({ error: 'Snapshot not found' }, 404);
+    }
+
+    const parsed = parseStoredSnapshot(raw);
+    try {
+      console.log('[SubVault] GET /snapshot/:id - parsed snapshot:', JSON.stringify(parsed, null, 2));
+    } catch (err) {
+      console.log('[SubVault] GET /snapshot/:id - parsed snapshot (inspect):', parsed);
+    }
+    if (!parsed) {
+      return c.json({ error: 'Invalid snapshot data' }, 400);
+    }
+
+    const snapshotId = parsed.id ?? 'unknown';
+    const message = parsed.message ?? 'Snapshot created';
+    const timestampRaw = snapshotId.replace(/\D/g, '');
+    const fallbackTimestamp =
+      timestampRaw.length > 0
+        ? new Date(Number.parseInt(timestampRaw, 10)).toISOString()
+        : new Date(0).toISOString();
+
+    let author = 'Manual Commit';
+    if (message.includes('Triggered by')) {
+      const match = message.match(/Triggered by (.+?) via/);
+      const matchedAuthor = match?.[1];
+      author = matchedAuthor ?? 'System Mod';
+    }
+
+    const response = {
+      id: snapshotId,
+      author,
+      hash: timestampRaw.slice(-7),
+      message,
+      timestamp: parsed.createdAt ?? fallbackTimestamp,
+      changes: Object.keys(parsed.data ?? {}).length,
+      status: 'success' as const,
+      data: parsed.data,
+    };
+
+    return c.json(response);
+  } catch (error) {
+    console.error('[SubVault] Failed to fetch snapshot detail:', error);
+    return c.json({ error: 'Failed to fetch snapshot' }, 500);
   }
 });
