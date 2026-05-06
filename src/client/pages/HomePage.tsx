@@ -9,8 +9,7 @@ import { SnapshotTable } from '../components/snapshot-table';
 import { CreateSnapshotModal } from '../components/create-snapshot-modal';
 import { DiffViewerDrawer } from '../components/diff-viewer-drawer';
 
-// Only keep metrics and diffs; REMOVE mockSnapshots
-import { mockMetrics, mockDiffs } from '../lib/data'; 
+import { mockMetrics, mockDiffs } from '../lib/data';
 import { CommitSnapshot } from '../lib/types';
 
 export default function Dashboard() {
@@ -18,23 +17,18 @@ export default function Dashboard() {
   const [isDiffDrawerOpen, setIsDiffDrawerOpen] = useState(false);
   const [selectedSnapshot, setSelectedSnapshot] = useState<CommitSnapshot | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
-  
-  // Empty state for live database
   const [snapshots, setSnapshots] = useState<CommitSnapshot[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
-  // Fetch real data on mount
   useEffect(() => {
     async function fetchSnapshots() {
       try {
-        // This matches your Hono route: app.route('/api/snapshot')
-        const response = await fetch('/api/snapshot'); 
+        const response = await fetch('/api/snapshot');
         if (response.ok) {
           const data = await response.json();
-          // Convert date strings to Date objects for the UI
-          const formattedData = data.map((snap: { timestamp: string | number | Date; }) => ({
+          const formattedData = data.map((snap: { timestamp: string | number | Date }) => ({
             ...snap,
-            timestamp: new Date(snap.timestamp)
+            timestamp: new Date(snap.timestamp),
           }));
           setSnapshots(formattedData);
         }
@@ -63,24 +57,32 @@ export default function Dashboard() {
     setIsDiffDrawerOpen(true);
   };
 
-  const handleCreateSnapshot = (data: { message: string; description?: string }) => {
-    const timestamp = Date.now();
-    const id = `manual_${timestamp}`;
-    const hash = String(timestamp).slice(-7);
+  const handleCreateSnapshot = async (data: { message: string; description?: string }) => {
+    try {
+      const response = await fetch('/api/snapshot', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: data.message, description: data.description ?? '' }),
+      });
 
-    const newSnapshot: CommitSnapshot = {
-      id,
-      author: 'Manual Commit',
-      hash,
-      message: data.message,
-      timestamp: new Date(timestamp),
-      changes: 0,
-      status: 'success',
-    };
+      if (!response.ok) {
+        console.error('[SubVault] Failed to save snapshot, status:', response.status);
+        return;
+      }
 
-    console.log('[SubVault] Manual snapshot created', newSnapshot);
-    setSnapshots((prev) => [newSnapshot, ...prev]);
-    setIsCreateModalOpen(false);
+      const saved = await response.json();
+      const newSnapshot: CommitSnapshot = {
+        ...saved,
+        timestamp: new Date(saved.timestamp),
+      };
+
+      console.log('[SubVault] Manual snapshot persisted', newSnapshot);
+      setSnapshots((prev) => [newSnapshot, ...prev]);
+    } catch (error) {
+      console.error('[SubVault] Error creating snapshot:', error);
+    } finally {
+      setIsCreateModalOpen(false);
+    }
   };
 
   return (
@@ -95,7 +97,7 @@ export default function Dashboard() {
           <StatsCard
             icon={BarChart3}
             title="Total Snapshots"
-            value={snapshots.length} // Live dynamic value
+            value={snapshots.length}
             subtitle="All time"
           />
           <StatsCard
@@ -122,7 +124,9 @@ export default function Dashboard() {
           <div className="px-3 sm:px-6 py-3 sm:py-4 border-b border-border">
             <h3 className="text-base sm:text-lg font-semibold text-foreground">Recent Snapshots</h3>
             <p className="text-xs sm:text-sm text-muted-foreground mt-1">
-              {isLoading ? "Loading backups..." : `${filteredSnapshots.length} of ${snapshots.length} snapshots`}
+              {isLoading
+                ? 'Loading backups...'
+                : `${filteredSnapshots.length} of ${snapshots.length} snapshots`}
             </p>
           </div>
           <SnapshotTable snapshots={filteredSnapshots} onViewDiff={handleViewDiff} />

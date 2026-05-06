@@ -52,6 +52,7 @@ function parseStoredSnapshot(raw: string): StoredSnapshot | null {
   return snapshot;
 }
 
+// GET — list all snapshots from Redis
 snapshot.get('/', async (c) => {
   try {
     const snapshotMap = await redis.hGetAll('snapshot_backups');
@@ -107,5 +108,49 @@ snapshot.get('/', async (c) => {
   } catch (error) {
     console.error('[SubVault] Failed to fetch snapshots:', error);
     return c.json({ error: 'Failed to fetch snapshots' }, 500);
+  }
+});
+
+// POST — persist a manually created snapshot to Redis
+snapshot.post('/', async (c) => {
+  try {
+    const body = await c.req.json<{ message?: string; description?: string }>();
+    const message =
+      typeof body.message === 'string' && body.message.trim()
+        ? body.message.trim()
+        : 'Manual snapshot';
+
+    const timestamp = Date.now();
+    const id = `manual_${timestamp}`;
+
+    const stored = {
+      id,
+      message,
+      data: { description: body.description ?? '' },
+      createdAt: new Date(timestamp).toISOString(),
+    };
+
+    const payload = JSON.stringify(stored);
+
+    await Promise.all([
+      redis.set(`snapshot:${id}`, payload),
+      redis.hSet('snapshot_backups', { [id]: payload }),
+    ]);
+
+    const response: SnapshotListItem = {
+      id,
+      author: 'Manual Commit',
+      hash: String(timestamp).slice(-7),
+      message,
+      timestamp: stored.createdAt,
+      changes: 0,
+      status: 'success',
+    };
+
+    console.log('[SubVault] Manual snapshot saved to Redis:', id);
+    return c.json(response, 201);
+  } catch (error) {
+    console.error('[SubVault] Failed to save manual snapshot:', error);
+    return c.json({ error: 'Failed to save snapshot' }, 500);
   }
 });

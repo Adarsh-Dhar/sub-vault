@@ -173,13 +173,13 @@ triggers.post('/on-mod-action', async (c) => {
       }
       const serializedTruncated = JSON.stringify(truncatedSnapshot);
       await Promise.all([
-        redis.set(`snapshot:${id}`, serializedTruncated),
-        redis.hSet('snapshot_backups', { [id]: serializedTruncated }),
+        redis.set(id, serializedTruncated),
+        redis.zAdd('all_snapshots', { member: id, score: timestamp })
       ]);
     } else {
       await Promise.all([
-        redis.set(`snapshot:${id}`, payloadStr),
-        redis.hSet('snapshot_backups', { [id]: payloadStr }),
+        redis.set(id, payloadStr),
+        redis.zAdd('all_snapshots', { member: id, score: timestamp })
       ]);
     }
 
