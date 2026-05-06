@@ -10,7 +10,7 @@ import { CreateSnapshotModal } from '../components/create-snapshot-modal';
 import { DiffViewerDrawer } from '../components/diff-viewer-drawer';
 import { SnapshotDetailModal } from '../components/snapshot-detail-modal';
 
-import { mockMetrics, mockDiffs } from '../lib/data';
+import { mockMetrics } from '../lib/data';
 import { CommitSnapshot, SnapshotDetail } from '../lib/types';
 
 export default function Dashboard() {
@@ -165,7 +165,6 @@ export default function Dashboard() {
         isOpen={isDiffDrawerOpen}
         onClose={() => setIsDiffDrawerOpen(false)}
         snapshot={selectedSnapshot}
-        diffs={mockDiffs}
       />
       <SnapshotDetailModal
         isOpen={isDetailModalOpen}

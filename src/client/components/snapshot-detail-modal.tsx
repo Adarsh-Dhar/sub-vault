@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { SnapshotDetail, CommunitySnapshotData } from '@/lib/types';
+import { SnapshotDetail, CommunitySnapshotData, Rule, Widget } from '@/lib/types';
 import { formatDistanceToNow } from 'date-fns';
 import {
   Dialog,
@@ -205,7 +205,7 @@ function RulesTab({ data }: { data: CommunitySnapshotData }) {
 
   return (
     <div className="space-y-3 pr-4">
-      {rules.map((rule: any, idx: number) => (
+      {rules.map((rule: Rule, idx: number) => (
         <Card key={idx} className="bg-card">
           <CardHeader className="pb-3">
             <CardTitle className="text-base">
@@ -275,7 +275,7 @@ function WidgetsTab({ data }: { data: CommunitySnapshotData }) {
 
   return (
     <div className="space-y-2 pr-4">
-      {widgets.map((widget: any, idx: number) => (
+            {widgets.map((widget: Widget, idx: number) => (
         <Card key={idx} className="bg-card">
           <CardContent className="pt-6">
             <div className="text-sm">
@@ -364,7 +364,7 @@ function AutomodTab({ data }: { data: CommunitySnapshotData }) {
 
   return (
     <div className="pr-4">
-      <pre className="bg-muted p-4 rounded text-xs overflow-auto max-h-96 text-foreground whitespace-pre-wrap break-words">
+      <pre className="bg-muted p-4 rounded text-xs overflow-auto max-h-96 text-foreground whitespace-pre-wrap wrap-break-word">
         {automod}
       </pre>
     </div>

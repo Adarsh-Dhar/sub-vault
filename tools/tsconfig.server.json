@@ -3,6 +3,7 @@
   "compilerOptions": {
     "outDir": "../dist/types/server",
     "tsBuildInfoFile": "../dist/types/server/tsconfig.tsbuildinfo",
+    "ignoreDeprecations": "6.0",
     "customConditions": [],
     "types": ["node"],
     "exactOptionalPropertyTypes": false,

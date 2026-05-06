@@ -8,8 +8,7 @@ import { TopNavigation } from '../components/top-navigation';
 import { DiffViewerDrawer } from '../components/diff-viewer-drawer';
 import { Button } from '../components/ui/button';
 
-// REMOVE mockSnapshots import
-import { mockDiffs } from '../lib/data';
+// data imports removed (use real API)
 import { CommitSnapshot } from '../lib/types';
 import { Link } from 'react-router-dom';
 
@@ -105,7 +104,6 @@ export default function SnapshotsPage() {
         isOpen={isDiffDrawerOpen}
         onClose={() => setIsDiffDrawerOpen(false)}
         snapshot={selectedSnapshot}
-        diffs={mockDiffs}
       />
     </DashboardLayout>
   );

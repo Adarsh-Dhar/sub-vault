@@ -23,47 +23,7 @@ type CreateDiffBody = {
   content?: string;
 };
 
-const mockDiffs: Diff[] = [
-  {
-    type: 'add',
-    file: 'src/auth/middleware.ts',
-    additions: 42,
-    deletions: 0,
-    content: `+ export async function authenticateUser(req: Request) {
-+   const token = req.headers.authorization?.split(' ')[1];
-+   if (!token) return null;
-+   try {
-+     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-+     return decoded;
-+   } catch {
-+     return null;
-+   }
-+ }`,
-  },
-  {
-    type: 'remove',
-    file: 'src/legacy/oldAuth.ts',
-    additions: 0,
-    deletions: 28,
-    content: `- // Old authentication approach (deprecated)
-- function legacyAuth(credentials) {
--   const hash = md5(credentials.password);
--   return validateHash(hash);
-- }`,
-  },
-  {
-    type: 'modify',
-    file: 'src/api/routes.ts',
-    additions: 12,
-    deletions: 8,
-    content: `- app.get('/users', handleRequest);
-+ app.get('/users', authenticate, handleRequest);
-+
-+ app.post('/users/logout', authenticate, (req, res) => {
-+   res.json({ success: true });
-+ });`,
-  },
-];
+const mockDiffs: Diff[] = [];
 
 export const diffs = new Hono();
 
