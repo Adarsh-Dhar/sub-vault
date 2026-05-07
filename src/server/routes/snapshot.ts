@@ -470,8 +470,9 @@ snapshot.get('/:id/diff', async (c) => {
 // ─── POST /api/snapshot/:id/restore ──────────────────────────────────────────
 snapshot.post('/:id/restore', async (c) => {
   try {
-    const body = await c.req.json<{ targetId?: string }>();
+    const body = await c.req.json<{ targetId?: string; deleteAutomodIfMissing?: boolean }>();
     const targetId = body.targetId;
+    const deleteAutomodIfMissing = body.deleteAutomodIfMissing === true;
     if (!targetId) return c.json({ error: 'targetId is required' }, 400);
 
     let targetRaw = await redis.get(`snapshot:${targetId}`);
@@ -571,23 +572,94 @@ snapshot.post('/:id/restore', async (c) => {
     await attempt('automoderator', async () => {
       const rawConfig = d['automoderator'];
 
-      // Skip if the snapshot didn't have automod configured
+      console.log('[SubVault] Restoring automoderator — snapshot value present:', typeof rawConfig === 'string' ? `${rawConfig.length} chars` : String(rawConfig));
+
+      // Prefer resolving the automod page from the *current* wiki pages list,
+      // falling back to the snapshot's wikiPages if necessary. This avoids
+      // updating the wrong page when wiki page names have changed since the
+      // snapshot was taken.
+      const currentWikiPages = await safeFetch(() => reddit.getWikiPages(subName), []);
+      const resolvedPage =
+        resolveAutomodPageName(currentWikiPages) ?? resolveAutomodPageName(d['wikiPages']) ?? DEFAULT_AUTOMOD_PAGE;
+      console.log('[SubVault] Resolved automod wiki page for restore:', resolvedPage);
+
+      // Log a short preview of the snapshot content for debugging
+      const preview = typeof rawConfig === 'string' ? rawConfig.slice(0, 200).replace(/\s+/g, ' ') : String(rawConfig);
+      console.log('[SubVault] Snapshot automoderator preview:', preview);
+      // If snapshot indicates automod is not configured, optionally delete/blank the wiki page
       if (rawConfig === 'Not configured' || typeof rawConfig !== 'string' || rawConfig.trim() === '') {
-        restoreResults['automoderator'] = { success: true, skipped: true };
+        if (!deleteAutomodIfMissing) {
+          console.log('[SubVault] Skipping automoderator restore (snapshot indicates not configured and deleteAutomodIfMissing=false)');
+          restoreResults['automoderator'] = { success: true, skipped: true };
+          return;
+        }
+
+        // perform destructive removal/blanking as explicitly requested
+        console.log(`[SubVault] deleteAutomodIfMissing=true — removing automoderator page (${resolvedPage}) for r/${subName}`);
+
+        // Read current page before attempting delete/blank
+        try {
+          const before = await safeFetch(() => reddit.getWikiPage(subName, resolvedPage), null as any);
+          console.log('[SubVault] Pre-delete wiki page content:', before ? `present (${String(before.content ?? '').length} chars)` : 'null/404');
+        } catch (e) {
+          console.warn('[SubVault] Pre-delete wiki page read failed:', String(e).slice(0, 200));
+        }
+
+        // Prefer deleteWikiPage if available; otherwise blank the page via update
+        if (typeof (reddit as any).deleteWikiPage === 'function') {
+          await (reddit as any).deleteWikiPage({ subredditName: subName, page: resolvedPage });
+          console.log('[SubVault] deleteWikiPage succeeded');
+        } else {
+          await reddit.updateWikiPage({
+            subredditName: subName,
+            page: resolvedPage,
+            content: '',
+            reason: 'SubVault: removed AutoModerator via restore',
+          });
+          console.log('[SubVault] updateWikiPage (blank) succeeded');
+        }
+
+        // verify result
+        try {
+          const check = await safeFetch(() => reddit.getWikiPage(subName, resolvedPage), null as any);
+          console.log('[SubVault] Post-delete check wiki page content:', check ? `present (${String(check.content ?? '').length} chars)` : 'null/404');
+        } catch (e) {
+          console.warn('[SubVault] Post-delete verification failed:', String(e).slice(0, 200));
+        }
+
+        restoreResults['automoderator'] = { success: true };
         return;
       }
 
+      // Otherwise restore the automod config from the snapshot
       await ensureWikiReadAccess(subName);
 
-      const resolvedPage = resolveAutomodPageName(d['wikiPages']) ?? DEFAULT_AUTOMOD_PAGE;
+      // Read current page before update for diagnostics
+      try {
+        const before = await safeFetch(() => reddit.getWikiPage(subName, resolvedPage), null as any);
+        console.log('[SubVault] Pre-restore wiki page content:', before ? `present (${String(before.content ?? '').length} chars)` : 'null/404');
+      } catch (e) {
+        console.warn('[SubVault] Pre-restore wiki page read failed:', String(e).slice(0, 200));
+      }
 
-      // Restore the automod config from the snapshot
       await reddit.updateWikiPage({
         subredditName: subName,
         page: resolvedPage,
         content: rawConfig,
         reason: 'SubVault: restored from snapshot',
       });
+
+      // verify the updated page contains the content we just wrote
+      try {
+        const check = await safeFetch(() => reddit.getWikiPage(subName, resolvedPage), null as any);
+        console.log('[SubVault] Post-restore wiki page content length:', check ? String(check.content ?? '').length : 'null');
+        if (check && typeof check.content === 'string' && check.content.trim() !== rawConfig.trim()) {
+          console.warn('[SubVault] Warning: Post-restore wiki content does not match snapshot content (lengths:', String(check.content.length), 'vs', String((rawConfig as string).length), ')');
+        }
+      } catch (e) {
+        console.warn('[SubVault] Post-restore verification failed:', String(e).slice(0, 200));
+      }
+
       restoreResults['automoderator'] = { success: true };
     });
 

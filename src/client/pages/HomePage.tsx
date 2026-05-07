@@ -7,7 +7,6 @@ import { ModeratorFilter } from '../components/moderator-filter';
 import { SnapshotTable } from '../components/snapshot-table';
 import { CreateSnapshotModal } from '../components/create-snapshot-modal';
 import { DiffViewerDrawer } from '../components/diff-viewer-drawer';
-import { SnapshotDetailModal } from '../components/snapshot-detail-modal';
 import { CommitSnapshot, SnapshotDetail } from '../lib/types';
 
 export default function Dashboard() {
@@ -162,11 +161,11 @@ export default function Dashboard() {
         onClose={() => setIsDiffDrawerOpen(false)}
         snapshot={selectedSnapshot}
       />
-      <SnapshotDetailModal
+      {/* <SnapshotDetailModal
         isOpen={isDetailModalOpen}
         onClose={() => setIsDetailModalOpen(false)}
         snapshot={selectedDetail}
-      />
+      /> */}
     </DashboardLayout>
   );
 }
