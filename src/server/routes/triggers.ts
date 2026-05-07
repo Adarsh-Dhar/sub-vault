@@ -83,6 +83,71 @@ const ACTION_LABELS: Record<string, string> = {
   removecontributor: 'Approved user removed',
 };
 
+const DEFAULT_AUTOMOD_PAGE = 'config/automoderator' as const;
+const AUTOMOD_PAGE_CANDIDATES = [DEFAULT_AUTOMOD_PAGE, 'automoderator'] as const;
+
+function normalizePageName(page: string): string {
+  return page.trim().toLowerCase();
+}
+
+async function ensureWikiReadAccess(subredditName: string): Promise<void> {
+  const currentUsername = await safeFetch(() => reddit.getCurrentUsername(), '');
+  if (!currentUsername) {
+    throw new Error('Unable to determine the current Reddit account for wiki access checks');
+  }
+
+  const moderators = await safeFetch(async () => {
+    const listing: Array<Record<string, unknown>> = [];
+    for await (const mod of reddit.getModerators({ subredditName })) {
+      const permissions = (mod as unknown as Record<string, unknown>).permissions ?? [];
+      listing.push({ username: mod.username, permissions });
+      if (listing.length >= 200) break;
+    }
+    return listing;
+  }, [] as Array<Record<string, unknown>>);
+
+  const moderator = moderators.find(
+    mod => String(mod.username ?? '').toLowerCase() === currentUsername.toLowerCase(),
+  );
+
+  if (!moderator) {
+    throw new Error(`@${currentUsername} is not a moderator of r/${subredditName}`);
+  }
+
+  const permissions = Array.isArray(moderator.permissions)
+    ? moderator.permissions.map(permission => String(permission))
+    : [];
+
+  console.log(
+    `[SubVault] Permission check for @${currentUsername} - permissions array:`,
+    JSON.stringify(permissions),
+  );
+
+  // Check if user has wiki permission or if they have all permissions
+  const hasWikiPermission = permissions.includes('wiki');
+  const hasAllPermissions =
+    permissions.length === 0 ||
+    permissions.includes('all') ||
+    permissions.includes('everything') ||
+    permissions.includes('*');
+
+  if (!hasWikiPermission && !hasAllPermissions) {
+    throw new Error(`@${currentUsername} needs the wiki moderator permission for r/${subredditName}`);
+  }
+}
+
+function resolveAutomodPageName(wikiPages: unknown): string | null {
+  const pages = Array.isArray(wikiPages) ? wikiPages.map(page => String(page)) : [];
+  const normalizedPages = new Map(pages.map(page => [normalizePageName(page), page] as const));
+
+  for (const candidate of AUTOMOD_PAGE_CANDIDATES) {
+    const resolved = normalizedPages.get(normalizePageName(candidate));
+    if (resolved) return resolved;
+  }
+
+  return null;
+}
+
 // Safe fetch wrapper
 const safeFetch = async <T>(fn: () => Promise<T>, fallback: T): Promise<T> => {
   try {
@@ -169,10 +234,21 @@ export async function captureFullCommunitySnapshot(subredditName: string) {
   // Automod wiki — separate because it 404s if not configured
   let automodConfig = 'Not configured';
   try {
-    const automodWiki = await reddit.getWikiPage(subredditName, 'config/automoderator');
+    await ensureWikiReadAccess(subredditName);
+    const resolvedPage = resolveAutomodPageName(wikiPagesResult) ?? DEFAULT_AUTOMOD_PAGE;
+    const automodWiki = await reddit.getWikiPage(subredditName, resolvedPage);
     automodConfig = automodWiki.content;
-  } catch {
-    console.log('[SubVault] No automoderator config found.');
+    console.log('[SubVault] Automod config captured (trigger):', automodConfig.length, 'characters from', resolvedPage);
+  } catch (err) {
+    const errMsg = String(err);
+    if (errMsg.includes('wiki moderator permission')) {
+      throw err;
+    }
+    if (errMsg.includes('404') || errMsg.includes('Not Found')) {
+      console.log('[SubVault] No automoderator config found (404).');
+    } else {
+      console.warn('[SubVault] Warning: Failed to fetch automod config (trigger):', errMsg.slice(0, 150));
+    }
   }
 
   // Subreddit settings (content controls, safety filters, etc.)

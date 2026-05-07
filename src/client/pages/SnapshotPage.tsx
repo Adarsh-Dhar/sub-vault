@@ -18,6 +18,8 @@ export default function SnapshotsPage() {
   const [selectedSnapshot, setSelectedSnapshot] = useState<CommitSnapshot | null>(null);
   const [isDetailModalOpen, setIsDetailModalOpen] = useState(false);
   const [selectedDetail, setSelectedDetail] = useState<SnapshotDetail | null>(null);
+  const [detailError, setDetailError] = useState<string | null>(null);
+  const [isDetailLoading, setIsDetailLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   
   const [snapshots, setSnapshots] = useState<CommitSnapshot[]>([]);
@@ -57,15 +59,21 @@ export default function SnapshotsPage() {
   }, [snapshots, searchQuery]);
 
   const handleViewDiff = (snapshot: CommitSnapshot) => {
+    console.log('[SubVault] Viewing diff for snapshot ID:', snapshot.id);
     setSelectedSnapshot(snapshot);
     setIsDiffDrawerOpen(true);
   };
 
   const handleViewDetails = async (snapshot: CommitSnapshot) => {
+    setDetailError(null);
+    setIsDetailLoading(true);
+    setSelectedDetail(null);
+    setIsDetailModalOpen(true);
+
     try {
-      console.log('Fetching details for snapshot ID:', snapshot.id);
+      console.log('[SubVault] Fetching details for snapshot ID:', snapshot.id);
       const response = await fetch(`/api/snapshot/${snapshot.id}`);
-      console.log('Fetching details :', response);
+      console.log('[SubVault] Fetching details :', response);
       if (response.ok) {
         const data = await response.json();
         const detailSnapshot: SnapshotDetail = {
@@ -73,12 +81,15 @@ export default function SnapshotsPage() {
           timestamp: new Date(data.timestamp),
         };
         setSelectedDetail(detailSnapshot);
-        setIsDetailModalOpen(true);
       } else {
+        setDetailError(`Failed to fetch snapshot details (${response.status})`);
         console.error('Failed to fetch snapshot details', response.status);
       }
     } catch (error) {
+      setDetailError('Failed to load snapshot details');
       console.error('Failed to load snapshot details', error);
+    } finally {
+      setIsDetailLoading(false);
     }
   };
 
@@ -135,8 +146,15 @@ export default function SnapshotsPage() {
       />
       <SnapshotDetailModal
         isOpen={isDetailModalOpen}
-        onClose={() => setIsDetailModalOpen(false)}
+        onClose={() => {
+          setIsDetailModalOpen(false);
+          setSelectedDetail(null);
+          setDetailError(null);
+          setIsDetailLoading(false);
+        }}
         snapshot={selectedDetail}
+        isLoading={isDetailLoading}
+        error={detailError}
       />
     </DashboardLayout>
   );

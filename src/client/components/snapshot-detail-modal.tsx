@@ -2,29 +2,25 @@
 
 import { useState } from 'react';
 import { Loader2, RotateCcw } from 'lucide-react';
-import { SnapshotDetail, CommunitySnapshotData, Rule, Widget } from '@/lib/types';
 import { formatDistanceToNow } from 'date-fns';
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from './ui/dialog';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
-import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
-import { Badge } from './ui/badge';
-import { ScrollArea } from './ui/scroll-area';
+import type { CommunitySnapshotData, SnapshotDetail } from '@/lib/types';
 import { Button } from './ui/button';
 
 interface SnapshotDetailModalProps {
   isOpen: boolean;
   onClose: () => void;
   snapshot: SnapshotDetail | null;
+  isLoading?: boolean;
+  error?: string | null;
 }
 
-export function SnapshotDetailModal({ isOpen, onClose, snapshot }: SnapshotDetailModalProps) {
-  const [activeTab, setActiveTab] = useState('identity');
+export function SnapshotDetailModal({
+  isOpen,
+  onClose,
+  snapshot,
+  isLoading = false,
+  error = null,
+}: SnapshotDetailModalProps) {
   const [isRestoring, setIsRestoring] = useState(false);
 
   const handleRestore = async () => {
@@ -50,379 +46,162 @@ export function SnapshotDetailModal({ isOpen, onClose, snapshot }: SnapshotDetai
     }
   };
 
-  // Safe Date Formatter to completely prevent crashes from formatDistanceToNow
   const safeTimeAgo = () => {
     if (!snapshot?.timestamp) return 'Unknown time';
     try {
-      const d = new Date(snapshot.timestamp);
-      if (isNaN(d.getTime())) return 'Unknown time';
-      return formatDistanceToNow(d, { addSuffix: true });
+      const date = new Date(snapshot.timestamp);
+      if (Number.isNaN(date.getTime())) return 'Unknown time';
+      return formatDistanceToNow(date, { addSuffix: true });
     } catch {
       return 'Unknown time';
     }
   };
 
-  // Render a SINGLE Dialog to avoid Radix UI unmount/remount bugs that lock the overlay
-  return (
-    <Dialog open={isOpen} onOpenChange={onClose}>
-      <DialogContent className="sm:max-w-3xl max-h-[90vh] overflow-hidden flex flex-col">
-        {!snapshot || !snapshot.data ? (
-          // Fallback UI if data is still loading or corrupted
-          <>
-            <DialogHeader>
-              <DialogTitle>Snapshot Details</DialogTitle>
-            </DialogHeader>
-            <div className="p-8 text-center text-muted-foreground flex flex-col items-center justify-center flex-1">
-              No data available for this snapshot
-            </div>
-          </>
-        ) : (
-          // Full UI
-          <>
-            <DialogHeader className="shrink-0 flex flex-row items-start justify-between pr-8 gap-4">
-              <div className="min-w-0 text-left">
-                <DialogTitle className="truncate">{snapshot.message || 'Snapshot'}</DialogTitle>
-                <DialogDescription className="truncate">
-                  {snapshot.author || 'Manual Commit'} • {safeTimeAgo()}
-                </DialogDescription>
-              </div>
-              <Button
-                onClick={handleRestore}
-                disabled={isRestoring}
-                className="shrink-0 flex items-center gap-2"
-              >
-                {isRestoring ? <Loader2 className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" />}
-                Restore Snapshot
-              </Button>
-            </DialogHeader>
+  const renderKeyValues = (data: CommunitySnapshotData) => {
+    const identity = data.identity;
+    const settings = data.settings;
+    const bannedCount = data.userManagement?.banned?.length ?? 0;
+    const mutedCount = data.userManagement?.muted?.length ?? 0;
+    const approvedCount = data.userManagement?.approved?.length ?? 0;
+    const moderatorCount = data.userManagement?.moderators?.length ?? 0;
 
-            <ScrollArea className="flex-1 overflow-hidden mt-2">
-              <Tabs
-                value={activeTab}
-                onValueChange={setActiveTab}
-                className="w-full px-6"
-              >
-                <TabsList className="grid w-full grid-cols-4 lg:grid-cols-8 mb-4">
-                  <TabsTrigger value="identity" className="text-xs">Identity</TabsTrigger>
-                  <TabsTrigger value="settings" className="text-xs">Settings</TabsTrigger>
-                  <TabsTrigger value="rules" className="text-xs">Rules</TabsTrigger>
-                  <TabsTrigger value="flairs" className="text-xs">Flairs</TabsTrigger>
-                  <TabsTrigger value="widgets" className="text-xs">Widgets</TabsTrigger>
-                  <TabsTrigger value="users" className="text-xs">Users</TabsTrigger>
-                  <TabsTrigger value="automod" className="text-xs">Automod</TabsTrigger>
-                </TabsList>
+    return (
+      <div className="grid gap-4 md:grid-cols-2">
+        <section className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+          <h3 className="text-sm font-semibold text-slate-900">Identity</h3>
+          <div className="mt-3 space-y-1 text-sm text-slate-600">
+            <div>Name: <span className="text-slate-900">{identity?.displayName || 'N/A'}</span></div>
+            <div>Type: <span className="text-slate-900">{identity?.subredditType || 'N/A'}</span></div>
+            <div>Subscribers: <span className="text-slate-900">{typeof identity?.subscribers === 'number' ? identity.subscribers.toLocaleString() : '0'}</span></div>
+            <div>Language: <span className="text-slate-900">{identity?.lang || 'N/A'}</span></div>
+          </div>
+        </section>
 
-                {/* We safely cast the data, knowing it exists from our check above */}
-                <TabsContent value="identity" className="mt-4 pb-6">
-                  <IdentityTab data={snapshot.data as CommunitySnapshotData} />
-                </TabsContent>
+        <section className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+          <h3 className="text-sm font-semibold text-slate-900">Counts</h3>
+          <div className="mt-3 space-y-1 text-sm text-slate-600">
+            <div>Rules: <span className="text-slate-900">{data.rules?.length ?? 0}</span></div>
+            <div>Post flairs: <span className="text-slate-900">{data.flairs?.post?.length ?? 0}</span></div>
+            <div>User flairs: <span className="text-slate-900">{data.flairs?.user?.length ?? 0}</span></div>
+            <div>Users: <span className="text-slate-900">{bannedCount + mutedCount + approvedCount + moderatorCount}</span></div>
+          </div>
+        </section>
 
-                <TabsContent value="settings" className="mt-4 pb-6">
-                  <SettingsTab data={snapshot.data as CommunitySnapshotData} />
-                </TabsContent>
+        <section className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+          <h3 className="text-sm font-semibold text-slate-900">Settings</h3>
+          <pre className="mt-3 max-h-60 overflow-auto rounded bg-white p-3 text-xs text-slate-900 whitespace-pre-wrap wrap-break-word border border-slate-200">
+            {JSON.stringify(settings ?? {}, null, 2)}
+          </pre>
+        </section>
 
-                <TabsContent value="rules" className="mt-4 pb-6">
-                  <RulesTab data={snapshot.data as CommunitySnapshotData} />
-                </TabsContent>
-
-                <TabsContent value="flairs" className="mt-4 pb-6">
-                  <FlairsTab data={snapshot.data as CommunitySnapshotData} />
-                </TabsContent>
-
-                <TabsContent value="widgets" className="mt-4 pb-6">
-                  <WidgetsTab data={snapshot.data as CommunitySnapshotData} />
-                </TabsContent>
-
-                <TabsContent value="users" className="mt-4 pb-6">
-                  <UserManagementTab data={snapshot.data as CommunitySnapshotData} />
-                </TabsContent>
-
-                <TabsContent value="automod" className="mt-4 pb-6">
-                  <AutomodTab data={snapshot.data as CommunitySnapshotData} />
-                </TabsContent>
-              </Tabs>
-            </ScrollArea>
-          </>
-        )}
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-function IdentityTab({ data }: { data: CommunitySnapshotData }) {
-  const identity = data?.identity;
-  if (!identity) {
-    return <div className="text-sm text-muted-foreground">No identity data available</div>;
-  }
-
-  // Safe date helper for createdAt
-  const safeDate = (dateStr: string) => {
-    try {
-      const d = new Date(dateStr);
-      return isNaN(d.getTime()) ? 'N/A' : d.toLocaleDateString();
-    } catch {
-      return 'N/A';
-    }
+        <section className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+          <h3 className="text-sm font-semibold text-slate-900">Automod</h3>
+          <pre className="mt-3 max-h-60 overflow-auto rounded bg-white p-3 text-xs text-slate-900 whitespace-pre-wrap wrap-break-word border border-slate-200">
+            {data.automoderator || 'Not configured'}
+          </pre>
+        </section>
+      </div>
+    );
   };
 
+  if (!isOpen) {
+    return null;
+  }
+
   return (
-    <div className="space-y-4 pr-4">
-      <div className="grid grid-cols-2 gap-4">
-        <DetailField label="Display Name" value={identity.displayName || 'N/A'} />
-        <DetailField label="Type" value={identity.subredditType || 'N/A'} />
-        {/* SAFE toLocaleString using optional chaining to prevent type crashes */}
-        <DetailField label="Subscribers" value={identity.subscribers?.toLocaleString() ?? '0'} />
-        <DetailField label="Language" value={identity.lang || 'N/A'} />
-        <DetailField label="NSFW" value={identity.nsfw ? 'Yes' : 'No'} />
-        <DetailField label="Created" value={safeDate(identity.createdAt)} />
-      </div>
-
-      <div className="space-y-2">
-        <label className="text-sm font-medium">Title</label>
-        <div className="p-2 bg-muted rounded text-sm text-foreground line-clamp-2">{identity.title || 'N/A'}</div>
-      </div>
-
-      <div className="space-y-2">
-        <label className="text-sm font-medium">Description</label>
-        <div className="p-2 bg-muted rounded text-sm text-foreground max-h-20 overflow-auto line-clamp-4">{identity.description || 'N/A'}</div>
-      </div>
-
-      <div className="space-y-2">
-        <label className="text-sm font-medium">Public Description</label>
-        <div className="p-2 bg-muted rounded text-sm text-foreground max-h-20 overflow-auto line-clamp-4">{identity.publicDescription || 'N/A'}</div>
-      </div>
-
-      <div className="grid grid-cols-2 gap-2">
-        <div className="space-y-1">
-          <label className="text-xs font-medium text-muted-foreground">Appearance</label>
-          <div className="space-y-1 text-xs">
-            <div className="flex items-center gap-2">
-              <span className="text-muted-foreground">Images:</span>
-              <Badge variant={identity.allowImages ? 'default' : 'secondary'}>
-                {identity.allowImages ? 'Allowed' : 'Disabled'}
-              </Badge>
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
+      onClick={onClose}
+      role="presentation"
+    >
+      <div
+        className="w-full max-w-4xl max-h-[90vh] overflow-hidden rounded-lg border border-slate-200 bg-white text-slate-900 shadow-2xl flex flex-col"
+        onClick={(event) => event.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Snapshot details"
+      >
+        {isLoading ? (
+          <div className="flex min-h-70 flex-col">
+            <div className="flex items-start justify-between gap-4 border-b px-6 py-4">
+              <div>
+                <h2 className="text-lg font-semibold text-foreground">Snapshot Details</h2>
+                <p className="mt-1 text-sm text-muted-foreground">Loading snapshot data...</p>
+              </div>
+              <Button variant="ghost" size="sm" onClick={onClose} type="button">
+                Close
+              </Button>
             </div>
-            <div className="flex items-center gap-2">
-              <span className="text-muted-foreground">Videos:</span>
-              <Badge variant={identity.allowVideos ? 'default' : 'secondary'}>
-                {identity.allowVideos ? 'Allowed' : 'Disabled'}
-              </Badge>
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="text-muted-foreground">Galleries:</span>
-              <Badge variant={identity.allowGalleries ? 'default' : 'secondary'}>
-                {identity.allowGalleries ? 'Allowed' : 'Disabled'}
-              </Badge>
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="text-muted-foreground">Polls:</span>
-              <Badge variant={identity.allowPolls ? 'default' : 'secondary'}>
-                {identity.allowPolls ? 'Allowed' : 'Disabled'}
-              </Badge>
+            <div className="flex flex-1 items-center justify-center gap-3 p-8 text-muted-foreground">
+              <Loader2 className="h-5 w-5 animate-spin" />
+              Loading snapshot details
             </div>
           </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function SettingsTab({ data }: { data: CommunitySnapshotData }) {
-  const settings = data?.settings;
-  if (!settings) {
-    return <div className="text-sm text-muted-foreground pr-4">No settings data available</div>;
-  }
-
-  return (
-    <div className="pr-4">
-      <pre className="bg-muted p-4 rounded text-xs overflow-auto max-h-96 text-foreground">
-        {JSON.stringify(settings, null, 2)}
-      </pre>
-    </div>
-  );
-}
-
-function RulesTab({ data }: { data: CommunitySnapshotData }) {
-  const rules = Array.isArray(data?.rules) ? data.rules : [];
-
-  if (rules.length === 0) {
-    return <div className="text-sm text-muted-foreground pr-4">No rules configured</div>;
-  }
-
-  return (
-    <div className="space-y-3 pr-4">
-      {rules.map((rule: Rule, idx: number) => (
-        <Card key={idx} className="bg-card">
-          <CardHeader className="pb-3">
-            <CardTitle className="text-base">
-              {(rule.priority ?? idx + 1)}. {(rule.name ?? 'Unnamed Rule')}
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-sm text-muted-foreground whitespace-pre-wrap">{rule.description ?? ''}</p>
-          </CardContent>
-        </Card>
-      ))}
-    </div>
-  );
-}
-
-function FlairsTab({ data }: { data: CommunitySnapshotData }) {
-  const postFlairs = data?.flairs?.post ?? [];
-  const userFlairs = data?.flairs?.user ?? [];
-
-  return (
-    <div className="space-y-6 pr-4">
-      <div>
-        <h4 className="text-sm font-semibold mb-3">Post Flairs ({postFlairs.length})</h4>
-        {postFlairs.length === 0 ? (
-          <div className="text-sm text-muted-foreground">No post flairs configured</div>
+        ) : error ? (
+          <div className="flex min-h-70 flex-col">
+            <div className="flex items-start justify-between gap-4 border-b px-6 py-4">
+              <div>
+                <h2 className="text-lg font-semibold text-foreground">Snapshot Details</h2>
+                <p className="mt-1 text-sm text-muted-foreground">Unable to load the selected snapshot.</p>
+              </div>
+              <Button variant="ghost" size="sm" onClick={onClose} type="button">
+                Close
+              </Button>
+            </div>
+            <div className="flex flex-1 items-center justify-center p-8 text-center text-sm text-destructive">
+              {error}
+            </div>
+          </div>
+        ) : !snapshot || !snapshot.data ? (
+          <div className="flex min-h-70 flex-col">
+            <div className="flex items-start justify-between gap-4 border-b px-6 py-4">
+              <div>
+                <h2 className="text-lg font-semibold text-foreground">Snapshot Details</h2>
+                <p className="mt-1 text-sm text-muted-foreground">No snapshot data was returned.</p>
+              </div>
+              <Button variant="ghost" size="sm" onClick={onClose} type="button">
+                Close
+              </Button>
+            </div>
+            <div className="flex flex-1 items-center justify-center p-8 text-center text-sm text-muted-foreground">
+              No data available for this snapshot
+            </div>
+          </div>
         ) : (
-          <div className="space-y-2">
-            {postFlairs.map((flair, idx) => (
-              <FlairBadge key={idx} flair={flair as Record<string, unknown>} />
-            ))}
-          </div>
-        )}
-      </div>
-
-      <div>
-        <h4 className="text-sm font-semibold mb-3">User Flairs ({userFlairs.length})</h4>
-        {userFlairs.length === 0 ? (
-          <div className="text-sm text-muted-foreground">No user flairs configured</div>
-        ) : (
-          <div className="space-y-2">
-            {userFlairs.map((flair, idx) => (
-              <FlairBadge key={idx} flair={flair as Record<string, unknown>} />
-            ))}
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function FlairBadge({ flair }: { flair: Record<string, unknown> }) {
-  return (
-    <div className="flex items-center gap-2 p-2 bg-muted rounded text-sm">
-      <span className="text-foreground">{(flair.text as string) || 'Unnamed'}</span>
-      {(flair.modOnly as boolean) && <Badge variant="secondary" className="text-xs">Mod Only</Badge>}
-      {(flair.textEditable as boolean) && <Badge variant="secondary" className="text-xs">User Editable</Badge>}
-    </div>
-  );
-}
-
-function WidgetsTab({ data }: { data: CommunitySnapshotData }) {
-  const widgets = Array.isArray(data?.widgets) ? data.widgets : [];
-
-  if (widgets.length === 0) {
-    return <div className="text-sm text-muted-foreground pr-4">No widgets configured</div>;
-  }
-
-  return (
-    <div className="space-y-2 pr-4">
-      {widgets.map((widget: Widget, idx: number) => (
-        <Card key={idx} className="bg-card">
-          <CardContent className="pt-6">
-            <div className="text-sm">
-              <DetailField label="Name" value={(widget.name as string) || 'Unnamed'} />
-              <DetailField label="Type" value={(widget.type as string) || 'Unknown'} />
-              <DetailField label="ID" value={(widget.id as string) || 'N/A'} />
-            </div>
-          </CardContent>
-        </Card>
-      ))}
-    </div>
-  );
-}
-
-function UserManagementTab({ data }: { data: CommunitySnapshotData }) {
-  const um = data?.userManagement ?? { banned: [], muted: [], approved: [], moderators: [] };
-  const banned = Array.isArray(um.banned) ? um.banned : [];
-  const muted = Array.isArray(um.muted) ? um.muted : [];
-  const approved = Array.isArray(um.approved) ? um.approved : [];
-  const moderators = Array.isArray(um.moderators) ? um.moderators : [];
-
-  return (
-    <div className="space-y-6 pr-4">
-      <UserList title="Banned Users" users={banned as Record<string, unknown>[]} count={banned.length} />
-      <UserList title="Muted Users" users={muted as Record<string, unknown>[]} count={muted.length} />
-      <UserList title="Approved Users" users={approved as Record<string, unknown>[]} count={approved.length} />
-      <ModeratorsTable moderators={moderators as Record<string, unknown>[]} count={moderators.length} />
-    </div>
-  );
-}
-
-function UserList({ title, users, count }: { title: string; users: Record<string, unknown>[]; count: number }) {
-  return (
-    <div>
-      <h4 className="text-sm font-semibold mb-3">{title} ({count})</h4>
-      {count === 0 ? (
-        <div className="text-sm text-muted-foreground">No {title.toLowerCase()}</div>
-      ) : (
-        <div className="space-y-1 max-h-40 overflow-auto">
-          {users.map((user, idx) => (
-            <div key={idx} className="flex items-center justify-between p-2 bg-muted rounded text-sm">
-              <span className="text-foreground font-mono">{(user?.username as string) || 'Unknown'}</span>
-              {(user?.note as string) && (
-                <span className="text-xs text-muted-foreground truncate ml-2">
-                  {(user.note as string).slice(0, 30)}
-                </span>
-              )}
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function ModeratorsTable({ moderators, count }: { moderators: Record<string, unknown>[]; count: number }) {
-  return (
-    <div>
-      <h4 className="text-sm font-semibold mb-3">Moderators ({count})</h4>
-      {count === 0 ? (
-        <div className="text-sm text-muted-foreground">No moderators</div>
-      ) : (
-        <div className="space-y-1 max-h-40 overflow-auto">
-          {moderators.map((mod, idx) => (
-            <div key={idx} className="p-2 bg-muted rounded text-sm">
-              <div className="font-mono text-foreground">{(mod?.username as string) || 'Unknown'}</div>
-              {Array.isArray(mod?.permissions) && mod.permissions.length > 0 && (
-                <div className="text-xs text-muted-foreground mt-1">
-                  {(mod.permissions as string[]).join(', ')}
+          <>
+            <div className="shrink-0 border-b px-6 py-4">
+              <div className="flex items-start justify-between gap-4">
+                <div className="min-w-0 text-left">
+                  <h2 className="truncate text-lg font-semibold text-foreground">
+                    {snapshot.message || 'Snapshot'}
+                  </h2>
+                  <p className="truncate text-sm text-muted-foreground">
+                    {snapshot.author || 'Manual Commit'} • {safeTimeAgo()}
+                  </p>
                 </div>
-              )}
+                <div className="flex items-center gap-2">
+                  <Button
+                    onClick={handleRestore}
+                    disabled={isRestoring}
+                    className="flex items-center gap-2"
+                    type="button"
+                  >
+                    {isRestoring ? <Loader2 className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" />}
+                    Restore Snapshot
+                  </Button>
+                  <Button variant="ghost" size="sm" onClick={onClose} type="button">
+                    Close
+                  </Button>
+                </div>
+              </div>
             </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
 
-function AutomodTab({ data }: { data: CommunitySnapshotData }) {
-  const automod = data?.automoderator;
-
-  if (!automod || automod === 'Not configured') {
-    return <div className="text-sm text-muted-foreground pr-4">Automoderator not configured</div>;
-  }
-
-  return (
-    <div className="pr-4">
-      {/* Changed CSS break-words so it's valid Tailwind */}
-      <pre className="bg-muted p-4 rounded text-xs overflow-auto max-h-96 text-foreground whitespace-pre-wrap break-words">
-        {String(automod)}
-      </pre>
-    </div>
-  );
-}
-
-function DetailField({ label, value }: { label: string; value: string | number }) {
-  return (
-    <div className="flex items-start gap-2">
-      <span className="text-xs font-medium text-muted-foreground shrink-0">{label}:</span>
-      <span className="text-sm text-foreground">{value}</span>
+            <div className="flex-1 overflow-y-auto px-6 py-4">
+              {renderKeyValues(snapshot.data as CommunitySnapshotData)}
+            </div>
+          </>
+        )}
+      </div>
     </div>
   );
 }

@@ -1,5 +1,8 @@
 {
   "name": "sub3-vault",
+  "permissions": {
+    "reddit": true
+  },
   "post": {
     "dir": "dist/client",
     "entrypoints": {

@@ -98,6 +98,70 @@ async function safeFetch<T>(fn: () => Promise<T>, fallback: T): Promise<T> {
   }
 }
 
+const DEFAULT_AUTOMOD_PAGE = 'config/automoderator' as const;
+const AUTOMOD_PAGE_CANDIDATES = [DEFAULT_AUTOMOD_PAGE, 'automoderator'] as const;
+
+function normalizePageName(page: string): string {
+  return page.trim().toLowerCase();
+}
+
+async function ensureWikiReadAccess(subredditName: string): Promise<void> {
+  const currentUsername = await safeFetch(() => reddit.getCurrentUsername(), '');
+  if (!currentUsername) {
+    throw new Error('Unable to determine the current Reddit account for wiki access checks');
+  }
+
+  const moderators = await safeFetch(async () => {
+    const listing: Array<Record<string, unknown>> = [];
+    for await (const mod of reddit.getModerators({ subredditName })) {
+      listing.push({ username: mod.username, permissions: (mod as any).permissions ?? [] });
+      if (listing.length >= 200) break;
+    }
+    return listing;
+  }, [] as Array<Record<string, unknown>>);
+
+  const moderator = moderators.find(
+    mod => String(mod.username ?? '').toLowerCase() === currentUsername.toLowerCase(),
+  );
+
+  if (!moderator) {
+    throw new Error(`@${currentUsername} is not a moderator of r/${subredditName}`);
+  }
+
+  const permissions = Array.isArray(moderator.permissions)
+    ? moderator.permissions.map(permission => String(permission))
+    : [];
+
+  console.log(
+    `[SubVault] Permission check for @${currentUsername} - permissions array:`,
+    JSON.stringify(permissions),
+  );
+
+  // Check if user has wiki permission or if they have all permissions
+  const hasWikiPermission = permissions.includes('wiki');
+  const hasAllPermissions =
+    permissions.length === 0 ||
+    permissions.includes('all') ||
+    permissions.includes('everything') ||
+    permissions.includes('*');
+
+  if (!hasWikiPermission && !hasAllPermissions) {
+    throw new Error(`@${currentUsername} needs the wiki moderator permission for r/${subredditName}`);
+  }
+}
+
+function resolveAutomodPageName(wikiPages: unknown): string | null {
+  const pages = Array.isArray(wikiPages) ? wikiPages.map(page => String(page)) : [];
+  const normalizedPages = new Map(pages.map(page => [normalizePageName(page), page] as const));
+
+  for (const candidate of AUTOMOD_PAGE_CANDIDATES) {
+    const resolved = normalizedPages.get(normalizePageName(candidate));
+    if (resolved) return resolved;
+  }
+
+  return null;
+}
+
 // ─── Single capture function used by both POST /snapshot and triggers ─────────
 // Stores everything in a consistent shape so the restore route can always
 // find data.rules, data.flairs.post, data.flairs.user, data.automoderator.
@@ -158,10 +222,21 @@ async function captureNormalizedSnapshot(subName: string): Promise<Record<string
 
   let automoderator = 'Not configured';
   try {
-    const wiki = await reddit.getWikiPage(subName, 'config/automoderator');
+    await ensureWikiReadAccess(subName);
+    const resolvedPage = resolveAutomodPageName(wikiPages) ?? DEFAULT_AUTOMOD_PAGE;
+    const wiki = await reddit.getWikiPage(subName, resolvedPage);
     automoderator = wiki.content;
-  } catch {
-    // not configured
+    console.log('[SubVault] Automod config captured:', automoderator.length, 'characters from', resolvedPage);
+  } catch (err) {
+    const errMsg = String(err);
+    if (errMsg.includes('wiki moderator permission')) {
+      throw err;
+    }
+    if (errMsg.includes('404') || errMsg.includes('Not Found')) {
+      console.log('[SubVault] Automod not configured (404)');
+    } else {
+      console.warn('[SubVault] Warning: Failed to fetch automod config:', errMsg.slice(0, 150));
+    }
   }
 
   const info = subredditInfo as any;
@@ -448,13 +523,6 @@ snapshot.post('/:id/restore', async (c) => {
       return Array.isArray(arr) ? arr as Array<Record<string, unknown>> : [];
     };
 
-    // AutoModerator
-    const readAutomod = (): string => {
-      const v = d['automoderator'];
-      if (typeof v !== 'string' || v === 'Not configured' || v.trim() === '') return '';
-      return v;
-    };
-
     // ── 1. Rules (additive restore — Devvit cannot delete rules) ──────────────
     await attempt('rules', async () => {
       const snapshotRules = readRules();
@@ -501,15 +569,23 @@ snapshot.post('/:id/restore', async (c) => {
 
     // ── 2. AutoModerator ──────────────────────────────────────────────────────
     await attempt('automoderator', async () => {
-      const config = readAutomod();
-      if (!config) {
+      const rawConfig = d['automoderator'];
+
+      // Skip if the snapshot didn't have automod configured
+      if (rawConfig === 'Not configured' || typeof rawConfig !== 'string' || rawConfig.trim() === '') {
         restoreResults['automoderator'] = { success: true, skipped: true };
         return;
       }
+
+      await ensureWikiReadAccess(subName);
+
+      const resolvedPage = resolveAutomodPageName(d['wikiPages']) ?? DEFAULT_AUTOMOD_PAGE;
+
+      // Restore the automod config from the snapshot
       await reddit.updateWikiPage({
         subredditName: subName,
-        page: 'config/automoderator',
-        content: config,
+        page: resolvedPage,
+        content: rawConfig,
         reason: 'SubVault: restored from snapshot',
       });
       restoreResults['automoderator'] = { success: true };
