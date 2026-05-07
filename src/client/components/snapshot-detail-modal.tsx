@@ -65,7 +65,6 @@ export function SnapshotDetailModal({ isOpen, onClose, snapshot }: SnapshotDetai
               <TabsTrigger value="widgets" className="text-xs">Widgets</TabsTrigger>
               <TabsTrigger value="users" className="text-xs">Users</TabsTrigger>
               <TabsTrigger value="automod" className="text-xs">Automod</TabsTrigger>
-              <TabsTrigger value="limits" className="text-xs">Limits</TabsTrigger>
             </TabsList>
 
             {/* Identity Tab */}
@@ -101,11 +100,6 @@ export function SnapshotDetailModal({ isOpen, onClose, snapshot }: SnapshotDetai
             {/* Automoderator Tab */}
             <TabsContent value="automod" className="mt-4 pb-6">
               <AutomodTab data={data} />
-            </TabsContent>
-
-            {/* Limitations Tab */}
-            <TabsContent value="limits" className="mt-4 pb-6">
-              <LimitationsTab data={data} />
             </TabsContent>
           </Tabs>
         </ScrollArea>
@@ -367,30 +361,6 @@ function AutomodTab({ data }: { data: CommunitySnapshotData }) {
       <pre className="bg-muted p-4 rounded text-xs overflow-auto max-h-96 text-foreground whitespace-pre-wrap wrap-break-word">
         {automod}
       </pre>
-    </div>
-  );
-}
-
-function LimitationsTab({ data }: { data: CommunitySnapshotData }) {
-  const limits = data.limitations;
-
-  return (
-    <div className="space-y-3 pr-4">
-      {Object.entries(limits).map(([key, value]) => (
-        <Card key={key} className="bg-card">
-          <CardContent className="pt-6">
-            <div className="space-y-1">
-              <h4 className="text-sm font-semibold capitalize">
-                {key.replace(/([A-Z])/g, ' $1').trim()}
-              </h4>
-              <p className="text-sm text-muted-foreground">{value as string}</p>
-            </div>
-          </CardContent>
-        </Card>
-      ))}
-      <div className="p-4 bg-amber-500/10 rounded border border-amber-200 dark:border-amber-800 text-sm text-amber-700 dark:text-amber-400">
-        Some community data points are not available through the Devvit API. For comprehensive backups, consider additional manual exports.
-      </div>
     </div>
   );
 }

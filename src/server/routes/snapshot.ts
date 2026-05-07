@@ -1,4 +1,3 @@
-// src/server/routes/snapshot.ts
 import { Hono } from 'hono';
 import { context, redis, reddit } from '@devvit/web/server';
 
@@ -98,173 +97,7 @@ snapshot.get('/', async (c) => {
   }
 });
 
-// ─── GET /api/snapshot/:id — single snapshot with full data ──────────────────
-snapshot.get('/:id', async (c) => {
-  const id = c.req.param('id');
-  try {
-    const snapshotMap = await redis.hGetAll('snapshot_backups');
-    const raw = snapshotMap[id] ?? await redis.get(id) ?? null;
-
-    if (!raw) return c.json({ error: 'Snapshot not found' }, 404);
-
-    const parsed = parseStoredSnapshot(raw);
-    if (!parsed) return c.json({ error: 'Corrupt snapshot' }, 500);
-
-    return c.json({ ...toListItem(parsed), data: parsed.data ?? {} });
-  } catch (error) {
-    console.error('[SubVault] Failed to fetch snapshot by id:', error);
-    return c.json({ error: 'Failed to fetch snapshot' }, 500);
-  }
-});
-
-// ─── GET /api/snapshot/:id/diff — diff against the previous snapshot ─────────
-snapshot.get('/:id/diff', async (c) => {
-  const id = c.req.param('id');
-  try {
-    const snapshotMap = await redis.hGetAll('snapshot_backups');
-    const allRaw = Object.values(snapshotMap);
-
-    const all: Array<StoredSnapshot & { _ts: number }> = [];
-    for (const raw of allRaw) {
-      const p = parseStoredSnapshot(raw);
-      if (!p) continue;
-      const tsRaw = (p.id ?? '').replace(/\D/g, '');
-      const ts = tsRaw.length > 0 ? Number.parseInt(tsRaw, 10) : 0;
-      all.push({ ...p, _ts: ts });
-    }
-    all.sort((a, b) => b._ts - a._ts);
-
-    const idx = all.findIndex(s => s.id === id);
-    if (idx === -1) return c.json({ error: 'Snapshot not found' }, 404);
-
-    const current = all[idx]!;
-    const previous = idx + 1 < all.length ? all[idx + 1] : null;
-
-    return c.json({
-      current: {
-        id: current.id,
-        message: current.message,
-        createdAt: current.createdAt,
-        data: current.data ?? {},
-      },
-      previous: previous
-        ? {
-            id: previous.id,
-            message: previous.message,
-            createdAt: previous.createdAt,
-            data: previous.data ?? {},
-          }
-        : null,
-    });
-  } catch (error) {
-    console.error('[SubVault] Failed to compute diff context:', error);
-    return c.json({ error: 'Failed to compute diff' }, 500);
-  }
-});
-
-// ─── POST /api/snapshot/:id/restore — restore to a previous snapshot ─────────
-snapshot.post('/:id/restore', async (c) => {
-  const id = c.req.param('id');
-  try {
-    const body = await c.req.json<{ targetId?: string }>();
-    const targetId = body.targetId;
-    const subName = context.subredditName; // Need this to tell Reddit WHICH sub to update
-
-    if (!targetId) {
-      return c.json({ error: 'targetId is required' }, 400);
-    }
-    if (!subName) {
-      return c.json({ error: 'Missing subreddit context' }, 400);
-    }
-
-    // Load the target (previous) snapshot
-    const snapshotMap = await redis.hGetAll('snapshot_backups');
-    const targetRaw = snapshotMap[targetId] ?? await redis.get(targetId) ?? null;
-
-    if (!targetRaw) return c.json({ error: 'Target snapshot not found' }, 404);
-
-    const target = parseStoredSnapshot(targetRaw);
-    if (!target) return c.json({ error: 'Corrupt target snapshot' }, 500);
-
-    const snapshotData = target.data ?? {};
-
-    // ==========================================
-    // THE MISSING PIECE: ACTUALLY RESTORE REDDIT
-    // ==========================================
-
-    // 1. Restore Automoderator Config
-    if (snapshotData.automoderator && snapshotData.automoderator !== "Not configured") {
-      try {
-        console.log(`[SubVault] Restoring Automod for r/${subName}...`);
-        await reddit.updateWikiPage({
-          subredditName: subName,
-          page: 'config/automoderator',
-          content: snapshotData.automoderator as string,
-          reason: `Restored to backup ${targetId} via SubVault`
-        });
-      } catch (err) {
-        console.error('[SubVault] Failed to overwrite Automod wiki:', err);
-      }
-    }
-
-    // 2. Restore Subreddit Settings
-    if (snapshotData.settings) {
-      try {
-        console.log(`[SubVault] Restoring Settings for r/${subName}...`);
-        
-        // 1. Fetch the Subreddit object first
-        const subreddit = await reddit.getSubredditByName(subName);
-        
-        // 2. Call updateSettings directly on that object
-        await subreddit.updateSettings(
-          snapshotData.settings as Record<string, unknown>
-        );
-        
-      } catch (err) {
-        console.error('[SubVault] Failed to overwrite Subreddit Settings:', err);
-      }
-    }
-
-    // ==========================================
-
-    // Create a new restore-point snapshot for the timeline
-    const timestamp = Date.now();
-    const newId = `restore_${timestamp}`;
-    const originalMessage = target.message ?? 'Unknown snapshot';
-
-    const restored = {
-      id: newId,
-      message: `Restore: reverted to "${originalMessage}"`,
-      data: snapshotData, // Save the data we just pushed
-      createdAt: new Date(timestamp).toISOString(),
-      restoredFrom: targetId,
-    };
-
-    const payload = JSON.stringify(restored);
-
-    await Promise.all([
-      redis.set(`snapshot:${newId}`, payload),
-      redis.hSet('snapshot_backups', { [newId]: payload }),
-    ]);
-
-    console.log(`[SubVault] Restore snapshot saved id=${newId} from targetId=${targetId}`);
-
-    return c.json({
-      id: newId,
-      author: 'System Restore',
-      hash: String(timestamp).slice(-7),
-      message: restored.message,
-      timestamp: restored.createdAt,
-      changes: Object.keys(restored.data).length,
-      status: 'success',
-    }, 201);
-  } catch (error) {
-    console.error('[SubVault] Failed to restore snapshot:', error);
-    return c.json({ error: 'Failed to restore snapshot' }, 500);
-  }
-});
-
-// ─── POST /api/snapshot — create manual snapshot ─────────────────────────────
+// ─── POST /api/snapshot — create snapshot with full subreddit details saved ───
 snapshot.post('/', async (c) => {
   try {
     const body = await c.req.json<{ message?: string; description?: string }>();
@@ -278,57 +111,43 @@ snapshot.post('/', async (c) => {
       return c.json({ error: 'Missing subreddit context' }, 400);
     }
 
-    // ── Fetch live subreddit data ──────────────────────────────────────────
     const subreddit = await reddit.getSubredditByName(subName);
 
-    // Community visibility & type
+    // Log everything
+    console.log('[SubVault] === Creating Snapshot ===');
     console.log('[SubVault] Type:', subreddit.type);
     console.log('[SubVault] NSFW:', subreddit.nsfw);
-
-    // Textual identity
     console.log('[SubVault] Name:', subreddit.name);
     console.log('[SubVault] Title:', subreddit.title);
     console.log('[SubVault] Description:', subreddit.description);
     console.log('[SubVault] Language:', subreddit.language);
-
-    // Stats
     console.log('[SubVault] Subscribers:', subreddit.numberOfSubscribers);
     console.log('[SubVault] Active Users:', subreddit.numberOfActiveUsers);
-
-    // Flair settings
     console.log('[SubVault] Post Flairs Enabled:', subreddit.postFlairsEnabled);
     console.log('[SubVault] User Flairs Enabled:', subreddit.userFlairsEnabled);
     console.log('[SubVault] Users Can Assign Post Flairs:', subreddit.usersCanAssignPostFlairs);
     console.log('[SubVault] Users Can Assign User Flairs:', subreddit.usersCanAssignUserFlairs);
-
-    // Settings blob
     console.log('[SubVault] Settings:', subreddit.settings);
 
-    // Community rules
     const rules = await reddit.getRules(subreddit.name);
     console.log('[SubVault] Rules:', rules);
 
-    // Removal reasons
     const removalReasons = await reddit.getSubredditRemovalReasons(subreddit.name);
     for (const reason of removalReasons) {
       console.log('[SubVault] Removal Reason:', reason.id, reason.title, reason.message);
     }
 
-    // Sidebar widgets
     const widgets = await reddit.getWidgets(subreddit.name);
     console.log('[SubVault] Widgets:', widgets);
 
-    // Moderation log (last 100)
     const modLog = await reddit.getModerationLog({
       subredditName: subreddit.name,
       limit: 100,
     }).all();
     console.log('[SubVault] Mod Log:', modLog);
 
-    // Subreddit styles
     const styles = await reddit.getSubredditStyles(subreddit.id);
     console.log('[SubVault] Styles:', styles);
-    // ──────────────────────────────────────────────────────────────────────
 
     const timestamp = Date.now();
     const id = `manual_${timestamp}`;
@@ -338,22 +157,18 @@ snapshot.post('/', async (c) => {
       message,
       data: {
         description: body.description ?? '',
-        // Community info
         type: subreddit.type,
         nsfw: subreddit.nsfw,
         name: subreddit.name,
         title: subreddit.title,
         subredditDescription: subreddit.description,
         language: subreddit.language,
-        // Stats
         numberOfSubscribers: subreddit.numberOfSubscribers,
         numberOfActiveUsers: subreddit.numberOfActiveUsers,
-        // Flair
         postFlairsEnabled: subreddit.postFlairsEnabled,
         userFlairsEnabled: subreddit.userFlairsEnabled,
         usersCanAssignPostFlairs: subreddit.usersCanAssignPostFlairs,
         usersCanAssignUserFlairs: subreddit.usersCanAssignUserFlairs,
-        // Structured data
         settings: subreddit.settings,
         rules,
         removalReasons,
@@ -365,13 +180,14 @@ snapshot.post('/', async (c) => {
     };
 
     const payload = JSON.stringify(stored);
-
     await Promise.all([
       redis.set(`snapshot:${id}`, payload),
       redis.hSet('snapshot_backups', { [id]: payload }),
     ]);
 
-    const response: SnapshotListItem = {
+    console.log('[SubVault] Snapshot saved to Redis:', id);
+
+    return c.json({
       id,
       author: 'Manual Commit',
       hash: String(timestamp).slice(-7),
@@ -379,12 +195,108 @@ snapshot.post('/', async (c) => {
       timestamp: stored.createdAt,
       changes: Object.keys(stored.data).length,
       status: 'success',
+    }, 201);
+  } catch (error) {
+    console.error('[SubVault] Failed to save snapshot:', error);
+    return c.json({ error: 'Failed to save snapshot' }, 500);
+  }
+});
+
+// ─── GET /api/snapshot/:id — fetch + log full details on demand (Details button) ──
+snapshot.get('/:id', async (c) => {
+  const id = c.req.param('id');
+  const subName = context.subredditName;
+
+  if (!subName) {
+    return c.json({ error: 'Missing subreddit context' }, 400);
+  }
+
+  try {
+    const subreddit = await reddit.getSubredditByName(subName);
+
+    // Log every field for this snapshot view
+    console.log('[SubVault] === Snapshot Details for id:', id, '===');
+    console.log('[SubVault] Type:', subreddit.type);
+    console.log('[SubVault] NSFW:', subreddit.nsfw);
+    console.log('[SubVault] Name:', subreddit.name);
+    console.log('[SubVault] Title:', subreddit.title);
+    console.log('[SubVault] Description:', subreddit.description);
+    console.log('[SubVault] Language:', subreddit.language);
+    console.log('[SubVault] Subscribers:', subreddit.numberOfSubscribers);
+    console.log('[SubVault] Active Users:', subreddit.numberOfActiveUsers);
+    console.log('[SubVault] Post Flairs Enabled:', subreddit.postFlairsEnabled);
+    console.log('[SubVault] User Flairs Enabled:', subreddit.userFlairsEnabled);
+    console.log('[SubVault] Users Can Assign Post Flairs:', subreddit.usersCanAssignPostFlairs);
+    console.log('[SubVault] Users Can Assign User Flairs:', subreddit.usersCanAssignUserFlairs);
+    console.log('[SubVault] Settings:', subreddit.settings);
+
+    const rules = await reddit.getRules(subreddit.name);
+    console.log('[SubVault] Rules:', rules);
+
+    const removalReasons = await reddit.getSubredditRemovalReasons(subreddit.name);
+    for (const reason of removalReasons) {
+      console.log('[SubVault] Removal Reason:', reason.id, reason.title, reason.message);
+    }
+
+    const widgets = await reddit.getWidgets(subreddit.name);
+    console.log('[SubVault] Widgets:', widgets);
+
+    const modLog = await reddit.getModerationLog({
+      subredditName: subreddit.name,
+      limit: 100,
+    }).all();
+    console.log('[SubVault] Mod Log:', modLog);
+
+    const styles = await reddit.getSubredditStyles(subreddit.id);
+    console.log('[SubVault] Styles:', styles);
+
+    // Store the fetched details under this snapshot id
+    const snapshotMap = await redis.hGetAll('snapshot_backups');
+    const raw = snapshotMap[id] ?? await redis.get(id) ?? null;
+
+    const parsed = raw ? parseStoredSnapshot(raw) : null;
+    const base = parsed ? toListItem(parsed) : { id, author: 'Unknown', hash: '', message: '', timestamp: new Date().toISOString(), changes: 0, status: 'success' as const };
+
+    const detailData = {
+      type: subreddit.type,
+      nsfw: subreddit.nsfw,
+      name: subreddit.name,
+      title: subreddit.title,
+      subredditDescription: subreddit.description,
+      language: subreddit.language,
+      numberOfSubscribers: subreddit.numberOfSubscribers,
+      numberOfActiveUsers: subreddit.numberOfActiveUsers,
+      postFlairsEnabled: subreddit.postFlairsEnabled,
+      userFlairsEnabled: subreddit.userFlairsEnabled,
+      usersCanAssignPostFlairs: subreddit.usersCanAssignPostFlairs,
+      usersCanAssignUserFlairs: subreddit.usersCanAssignUserFlairs,
+      settings: subreddit.settings,
+      rules,
+      removalReasons,
+      widgets,
+      modLog,
+      styles,
     };
 
-    console.log('[SubVault] Manual snapshot saved to Redis:', id);
-    return c.json(response, 201);
+    // Persist the detail data back into the snapshot entry
+    const updated = {
+      ...(parsed ?? {}),
+      id,
+      data: {
+        ...(parsed?.data ?? {}),
+        ...detailData,
+      },
+    };
+
+    const payload = JSON.stringify(updated);
+    await Promise.all([
+      redis.set(`snapshot:${id}`, payload),
+      redis.hSet('snapshot_backups', { [id]: payload }),
+    ]);
+
+    return c.json({ ...base, data: detailData });
   } catch (error) {
-    console.error('[SubVault] Failed to save manual snapshot:', error);
-    return c.json({ error: 'Failed to save snapshot' }, 500);
+    console.error('[SubVault] Failed to fetch snapshot details:', error);
+    return c.json({ error: 'Failed to fetch snapshot details' }, 500);
   }
 });
