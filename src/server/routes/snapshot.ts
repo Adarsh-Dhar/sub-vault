@@ -1,6 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { Hono } from 'hono';
-import { Rule } from '@devvit/public-api/apis/reddit/models/Rule.js';
 import { context, redis, reddit } from '@devvit/web/server';
 
 export const snapshot = new Hono();
@@ -54,11 +53,14 @@ function toListItem(parsed: StoredSnapshot): SnapshotListItem {
       : new Date(0).toISOString();
 
   let author = 'Manual Commit';
-  if (message.startsWith('Auto-Backup:')) {
-    const match = message.match(/— by (.+)$/);
-    author = match?.[1] ?? 'AutoMod';
-  } else if (message.startsWith('Restored from:')) {
+  if (message.startsWith('Restored from:')) {
     author = 'Restore';
+  } else {
+    // Try to extract author from "— by username" format (used for all manual/auto snapshots)
+    const match = message.match(/— by (.+)$/);
+    if (match?.[1]) {
+      author = match[1];
+    }
   }
 
   return {
@@ -278,13 +280,17 @@ snapshot.get('/', async (c) => {
 snapshot.post('/', async (c) => {
   try {
     const body = await c.req.json<{ message?: string; description?: string }>();
-    const message =
+    let message =
       typeof body.message === 'string' && body.message.trim()
         ? body.message.trim()
         : 'Manual snapshot';
 
     const subName = context.subredditName;
     if (!subName) return c.json({ error: 'Missing subreddit context' }, 400);
+
+    // Get the current moderator's username
+    const creator = await safeFetch(() => reddit.getCurrentUsername(), 'UnknownMod');
+    message = `${message} — by ${creator}`;
 
     const data = await captureNormalizedSnapshot(subName);
 
@@ -299,9 +305,17 @@ snapshot.post('/', async (c) => {
     ]);
 
     console.log('[SubVault] Manual snapshot saved:', id);
+    
+    // Extract author from message for response
+    let author = 'Manual Commit';
+    const match = message.match(/— by (.+)$/);
+    if (match?.[1]) {
+      author = match[1];
+    }
+    
     return c.json({
       id,
-      author: 'Manual Commit',
+      author,
       hash: String(timestamp).slice(-7),
       message,
       timestamp: stored.createdAt,

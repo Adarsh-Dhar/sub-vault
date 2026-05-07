@@ -1,16 +1,13 @@
 /* eslint-disable @typescript-eslint/no-floating-promises */
 'use client';
 import { useState, useMemo, useEffect } from 'react';
-import { BarChart3, GitCommit, Activity } from 'lucide-react';
 import { DashboardLayout } from '../components/dashboard-layout';
 import { TopNavigation } from '../components/top-navigation';
-import { StatsCard } from '../components/stats-card';
+import { ModeratorFilter } from '../components/moderator-filter';
 import { SnapshotTable } from '../components/snapshot-table';
 import { CreateSnapshotModal } from '../components/create-snapshot-modal';
 import { DiffViewerDrawer } from '../components/diff-viewer-drawer';
 import { SnapshotDetailModal } from '../components/snapshot-detail-modal';
-
-import { mockMetrics } from '../lib/data';
 import { CommitSnapshot, SnapshotDetail } from '../lib/types';
 
 export default function Dashboard() {
@@ -20,6 +17,7 @@ export default function Dashboard() {
   const [selectedSnapshot, setSelectedSnapshot] = useState<CommitSnapshot | null>(null);
   const [selectedDetail, setSelectedDetail] = useState<SnapshotDetail | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
+  const [selectedMod, setSelectedMod] = useState<string | null>(null);
   const [snapshots, setSnapshots] = useState<CommitSnapshot[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
@@ -45,15 +43,26 @@ export default function Dashboard() {
   }, []);
 
   const filteredSnapshots = useMemo(() => {
-    if (!searchQuery.trim()) return snapshots;
-    const query = searchQuery.toLowerCase();
-    return snapshots.filter(
-      (snapshot) =>
-        snapshot.author.toLowerCase().includes(query) ||
-        snapshot.message.toLowerCase().includes(query) ||
-        snapshot.hash.toLowerCase().includes(query)
-    );
-  }, [snapshots, searchQuery]);
+    let result = snapshots;
+
+    // Filter by search query
+    if (searchQuery.trim()) {
+      const query = searchQuery.toLowerCase();
+      result = result.filter(
+        (snapshot) =>
+          snapshot.author.toLowerCase().includes(query) ||
+          snapshot.message.toLowerCase().includes(query) ||
+          snapshot.hash.toLowerCase().includes(query)
+      );
+    }
+
+    // Filter by moderator
+    if (selectedMod) {
+      result = result.filter((snapshot) => snapshot.author === selectedMod);
+    }
+
+    return result;
+  }, [snapshots, searchQuery, selectedMod]);
 
   const handleViewDiff = (snapshot: CommitSnapshot) => {
     setSelectedSnapshot(snapshot);
@@ -116,32 +125,19 @@ export default function Dashboard() {
           <p className="text-sm sm:text-base text-muted-foreground mt-2">Monitor and manage your commit snapshots</p>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-6">
-          <StatsCard
-            icon={BarChart3}
-            title="Total Snapshots"
-            value={snapshots.length}
-            subtitle="All time"
-          />
-          <StatsCard
-            icon={Activity}
-            title="Active Subscriptions"
-            value={mockMetrics.activeSubscriptions}
-            subtitle="Currently tracking"
-          />
-          <StatsCard
-            icon={GitCommit}
-            title="Success Rate"
-            value={`${mockMetrics.successRate}%`}
-            subtitle="Last 30 days"
-          />
-        </div>
-
         <TopNavigation
           onCreateSnapshot={() => setIsCreateModalOpen(true)}
           searchQuery={searchQuery}
           onSearchChange={setSearchQuery}
         />
+
+        <div className="flex items-center gap-2">
+          <ModeratorFilter
+            snapshots={snapshots}
+            selectedMod={selectedMod}
+            onSelectMod={setSelectedMod}
+          />
+        </div>
 
         <div className="bg-card border border-border rounded-lg overflow-hidden">
           <div className="px-3 sm:px-6 py-3 sm:py-4 border-b border-border">

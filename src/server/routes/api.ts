@@ -91,3 +91,26 @@ api.post('/decrement', async (c) => {
     type: 'decrement',
   });
 });
+
+api.get('/moderators', async (c) => {
+  try {
+    const subName = context.subredditName;
+    if (!subName) {
+      return c.json({ error: 'Missing subreddit context' }, 400);
+    }
+
+    const moderators: Array<{ username: string; permissions: string[] }> = [];
+    for await (const m of reddit.getModerators({ subredditName: subName })) {
+      moderators.push({
+        username: m.username,
+        permissions: (m as any).permissions ?? [],
+      });
+      if (moderators.length >= 100) break;
+    }
+
+    return c.json(moderators.sort((a, b) => a.username.localeCompare(b.username)));
+  } catch (err) {
+    console.error('[SubVault] Failed to fetch moderators:', err);
+    return c.json({ error: 'Failed to fetch moderators' }, 500);
+  }
+});

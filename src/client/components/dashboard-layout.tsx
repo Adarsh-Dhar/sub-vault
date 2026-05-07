@@ -13,7 +13,6 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
   const navItems = [
     { to: '/', label: 'Dashboard' },
     { to: '/snapshots', label: 'Snapshots' },
-    { to: '/settings', label: 'Settings' },
   ];
 
   return (
@@ -41,9 +40,6 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
             </Link>
             <Link to="/snapshots" className="text-sm font-medium text-foreground hover:text-primary transition-colors">
               Snapshots
-            </Link>
-            <Link to="/settings" className="text-sm font-medium text-foreground hover:text-primary transition-colors">
-              Settings
             </Link>
           </nav>
 

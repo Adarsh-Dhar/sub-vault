@@ -10,7 +10,6 @@ export function MobileNav() {
   const navItems = [
     { to: '/', label: 'Dashboard' },
     { to: '/snapshots', label: 'Snapshots' },
-    { to: '/settings', label: 'Settings' },
   ];
 
   return (
