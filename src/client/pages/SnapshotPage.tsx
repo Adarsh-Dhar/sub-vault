@@ -6,15 +6,18 @@ import { DashboardLayout } from '../components/dashboard-layout';
 import { SnapshotTable } from '../components/snapshot-table';
 import { TopNavigation } from '../components/top-navigation';
 import { DiffViewerDrawer } from '../components/diff-viewer-drawer';
+import { SnapshotDetailModal } from '../components/snapshot-detail-modal';
 import { Button } from '../components/ui/button';
 
 // data imports removed (use real API)
-import { CommitSnapshot } from '../lib/types';
+import { CommitSnapshot, SnapshotDetail } from '../lib/types';
 import { Link } from 'react-router-dom';
 
 export default function SnapshotsPage() {
   const [isDiffDrawerOpen, setIsDiffDrawerOpen] = useState(false);
   const [selectedSnapshot, setSelectedSnapshot] = useState<CommitSnapshot | null>(null);
+  const [isDetailModalOpen, setIsDetailModalOpen] = useState(false);
+  const [selectedDetail, setSelectedDetail] = useState<SnapshotDetail | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   
   const [snapshots, setSnapshots] = useState<CommitSnapshot[]>([]);
@@ -58,6 +61,27 @@ export default function SnapshotsPage() {
     setIsDiffDrawerOpen(true);
   };
 
+  const handleViewDetails = async (snapshot: CommitSnapshot) => {
+    try {
+      console.log('Fetching details for snapshot ID:', snapshot.id);
+      const response = await fetch(`/api/snapshot/${snapshot.id}`);
+      console.log('Fetching details :', response);
+      if (response.ok) {
+        const data = await response.json();
+        const detailSnapshot: SnapshotDetail = {
+          ...data,
+          timestamp: new Date(data.timestamp),
+        };
+        setSelectedDetail(detailSnapshot);
+        setIsDetailModalOpen(true);
+      } else {
+        console.error('Failed to fetch snapshot details', response.status);
+      }
+    } catch (error) {
+      console.error('Failed to load snapshot details', error);
+    }
+  };
+
   return (
     <DashboardLayout>
       <div className="space-y-6">
@@ -96,7 +120,11 @@ export default function SnapshotsPage() {
               Export
             </Button>
           </div>
-          <SnapshotTable snapshots={filteredSnapshots} onViewDiff={handleViewDiff} />
+          <SnapshotTable
+            snapshots={filteredSnapshots}
+            onViewDiff={handleViewDiff}
+            onViewDetails={handleViewDetails}
+          />
         </div>
       </div>
 
@@ -104,6 +132,11 @@ export default function SnapshotsPage() {
         isOpen={isDiffDrawerOpen}
         onClose={() => setIsDiffDrawerOpen(false)}
         snapshot={selectedSnapshot}
+      />
+      <SnapshotDetailModal
+        isOpen={isDetailModalOpen}
+        onClose={() => setIsDetailModalOpen(false)}
+        snapshot={selectedDetail}
       />
     </DashboardLayout>
   );

@@ -196,7 +196,7 @@ export async function captureFullCommunitySnapshot(subredditName: string) {
 
   const identity = infoResult
     ? (() => {
-        const info = infoResult as Record<string, any>;
+        const info = infoResult as Record<string, never>;
         // Some API shapes use `over18` for NSFW, others use `nsfw`.
         const nsfwFlag = typeof info.over18 === 'boolean' ? info.over18 : info.nsfw ?? false;
         return {

@@ -2,7 +2,7 @@
 import { useEffect, useState } from "react";
 import {
   X, Plus, Minus, AlertCircle, GitCommit,
-  Eye, EyeOff, RotateCcw, ChevronRight, CheckCircle2, Loader2
+  Eye, EyeOff, ChevronRight, Loader2
 } from "lucide-react";
 import { Button } from "./ui/button";
 import type { CommitSnapshot } from "../lib/types";
@@ -22,8 +22,6 @@ type RawPayload = {
   previous: SnapEntry | null;
 };
 
-type RestoreState = "idle" | "confirming" | "loading" | "done" | "error";
-
 // ─── Main component ───────────────────────────────────────────────────────────
 
 export function DiffViewerDrawer({
@@ -40,7 +38,6 @@ export function DiffViewerDrawer({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showPreview, setShowPreview] = useState(false);
-  const [restoreState, setRestoreState] = useState<RestoreState>("idle");
 
   useEffect(() => {
     if (!isOpen || !snapshot) return;
@@ -52,7 +49,6 @@ export function DiffViewerDrawer({
       setDiffs(null);
       setPayload(null);
       setShowPreview(false);
-      setRestoreState("idle");
 
       try {
         const res = await fetch(`/api/snapshot/${snapshot?.id}/diff`);
@@ -76,22 +72,6 @@ export function DiffViewerDrawer({
     void load();
     return () => { cancelled = true; };
   }, [isOpen, snapshot]);
-
-  const handleRestore = async () => {
-    if (!payload?.previous || !snapshot) return;
-    setRestoreState("loading");
-    try {
-      const res = await fetch(`/api/snapshot/${snapshot.id}/restore`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ targetId: payload.previous.id }),
-      });
-      if (!res.ok) throw new Error(`status ${res.status}`);
-      setRestoreState("done");
-    } catch {
-      setRestoreState("error");
-    }
-  };
 
   if (!isOpen || !snapshot) return null;
 
@@ -135,7 +115,7 @@ export function DiffViewerDrawer({
             </Button>
           </div>
 
-          {/* Action row — only when there's a previous state to compare */}
+          {/* Action row — read-only now */}
           {!loading && !error && hasPrevious && (
             <div className="flex items-center gap-2 mt-3 pt-3 border-t border-border flex-wrap">
               <Button
@@ -149,38 +129,6 @@ export function DiffViewerDrawer({
                   : <Eye className="h-3.5 w-3.5" />}
                 {showPreview ? "Hide Previous State" : "Preview Previous State"}
               </Button>
-
-              {restoreState === "done" ? (
-                <span className="flex items-center gap-1.5 text-xs text-emerald-600 dark:text-emerald-400 font-medium ml-1">
-                  <CheckCircle2 className="h-3.5 w-3.5" />
-                  Restored successfully
-                </span>
-              ) : restoreState === "error" ? (
-                <span className="text-xs text-red-500 ml-1">Restore failed — try again</span>
-              ) : restoreState === "confirming" ? (
-                <div className="flex items-center gap-1.5">
-                  <span className="text-xs text-muted-foreground">Restore to previous state?</span>
-                  <Button size="sm" variant="destructive" className="h-7 text-xs px-2.5" onClick={handleRestore}>
-                    Yes, restore
-                  </Button>
-                  <Button size="sm" variant="ghost" className="h-7 text-xs px-2" onClick={() => setRestoreState("idle")}>
-                    Cancel
-                  </Button>
-                </div>
-              ) : (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setRestoreState("confirming")}
-                  disabled={restoreState === "loading"}
-                  className="flex items-center gap-1.5 text-xs h-8 border-amber-200 text-amber-700 hover:bg-amber-50 dark:border-amber-800 dark:text-amber-400 dark:hover:bg-amber-950/30"
-                >
-                  {restoreState === "loading"
-                    ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    : <RotateCcw className="h-3.5 w-3.5" />}
-                  Restore to Previous
-                </Button>
-              )}
             </div>
           )}
         </div>
@@ -315,11 +263,11 @@ function ChangeEntry({ change }: { change: Change }) {
         <div className="grid grid-cols-2 gap-2">
           <div className="rounded-lg px-3 py-2.5 bg-red-50 dark:bg-red-950/20 border border-red-100 dark:border-red-900/40">
             <p className="text-[10px] font-bold text-red-400 dark:text-red-500 mb-1 uppercase tracking-wider">Before</p>
-            <p className="text-sm text-red-800 dark:text-red-300 break-words leading-relaxed">{change.before}</p>
+            <p className="text-sm text-red-800 dark:text-red-300 wrap-break-word leading-relaxed">{change.before}</p>
           </div>
           <div className="rounded-lg px-3 py-2.5 bg-emerald-50 dark:bg-emerald-950/20 border border-emerald-100 dark:border-emerald-900/40">
             <p className="text-[10px] font-bold text-emerald-500 dark:text-emerald-400 mb-1 uppercase tracking-wider">After</p>
-            <p className="text-sm text-emerald-800 dark:text-emerald-300 break-words leading-relaxed">{change.after}</p>
+            <p className="text-sm text-emerald-800 dark:text-emerald-300 wrap-break-word leading-relaxed">{change.after}</p>
           </div>
         </div>
       </div>
@@ -336,7 +284,7 @@ function ChangeEntry({ change }: { change: Change }) {
           {change.label && (
             <p className="text-[10px] font-semibold text-emerald-600/70 dark:text-emerald-500 uppercase tracking-wider mb-0.5">{change.label}</p>
           )}
-          <p className="text-sm text-emerald-800 dark:text-emerald-300 break-words leading-relaxed">{change.value}</p>
+          <p className="text-sm text-emerald-800 dark:text-emerald-300 wrap-break-word leading-relaxed">{change.value}</p>
         </div>
       </div>
     );
@@ -351,7 +299,7 @@ function ChangeEntry({ change }: { change: Change }) {
         {change.label && (
           <p className="text-[10px] font-semibold text-red-500/70 uppercase tracking-wider mb-0.5">{change.label}</p>
         )}
-        <p className="text-sm text-red-800/70 dark:text-red-400/70 break-words leading-relaxed line-through">{change.value}</p>
+        <p className="text-sm text-red-800/70 dark:text-red-400/70 wrap-break-word leading-relaxed line-through">{change.value}</p>
       </div>
     </div>
   );

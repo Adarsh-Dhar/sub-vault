@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { Loader2, RotateCcw } from 'lucide-react';
 import { SnapshotDetail, CommunitySnapshotData, Rule, Widget } from '@/lib/types';
 import { formatDistanceToNow } from 'date-fns';
 import {
@@ -14,6 +15,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Badge } from './ui/badge';
 import { ScrollArea } from './ui/scroll-area';
+import { Button } from './ui/button';
 
 interface SnapshotDetailModalProps {
   isOpen: boolean;
@@ -23,121 +25,171 @@ interface SnapshotDetailModalProps {
 
 export function SnapshotDetailModal({ isOpen, onClose, snapshot }: SnapshotDetailModalProps) {
   const [activeTab, setActiveTab] = useState('identity');
+  const [isRestoring, setIsRestoring] = useState(false);
 
-  if (!snapshot || !snapshot.data) {
-    return (
-      <Dialog open={isOpen} onOpenChange={onClose}>
-        <DialogContent className="sm:max-w-2xl max-h-[90vh]">
-          <DialogHeader>
-            <DialogTitle>Snapshot Details</DialogTitle>
-          </DialogHeader>
-          <div className="p-4 text-center text-muted-foreground">
-            No data available for this snapshot
-          </div>
-        </DialogContent>
-      </Dialog>
-    );
-  }
+  const handleRestore = async () => {
+    if (!snapshot?.id) return;
 
-  const data = snapshot.data as CommunitySnapshotData;
+    setIsRestoring(true);
+    try {
+      const res = await fetch(`/api/snapshot/${snapshot.id}/restore`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ targetId: snapshot.id }),
+      });
 
+      if (!res.ok) {
+        throw new Error(`Restore failed: ${res.status}`);
+      }
+
+      onClose();
+    } catch (err) {
+      console.error('Failed to restore snapshot', err);
+    } finally {
+      setIsRestoring(false);
+    }
+  };
+
+  // Safe Date Formatter to completely prevent crashes from formatDistanceToNow
+  const safeTimeAgo = () => {
+    if (!snapshot?.timestamp) return 'Unknown time';
+    try {
+      const d = new Date(snapshot.timestamp);
+      if (isNaN(d.getTime())) return 'Unknown time';
+      return formatDistanceToNow(d, { addSuffix: true });
+    } catch {
+      return 'Unknown time';
+    }
+  };
+
+  // Render a SINGLE Dialog to avoid Radix UI unmount/remount bugs that lock the overlay
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
       <DialogContent className="sm:max-w-3xl max-h-[90vh] overflow-hidden flex flex-col">
-        <DialogHeader className="shrink-0">
-          <DialogTitle>{snapshot.message}</DialogTitle>
-          <DialogDescription>
-            {snapshot.author} • {formatDistanceToNow(new Date(snapshot.timestamp), { addSuffix: true })}
-          </DialogDescription>
-        </DialogHeader>
+        {!snapshot || !snapshot.data ? (
+          // Fallback UI if data is still loading or corrupted
+          <>
+            <DialogHeader>
+              <DialogTitle>Snapshot Details</DialogTitle>
+            </DialogHeader>
+            <div className="p-8 text-center text-muted-foreground flex flex-col items-center justify-center flex-1">
+              No data available for this snapshot
+            </div>
+          </>
+        ) : (
+          // Full UI
+          <>
+            <DialogHeader className="shrink-0 flex flex-row items-start justify-between pr-8 gap-4">
+              <div className="min-w-0 text-left">
+                <DialogTitle className="truncate">{snapshot.message || 'Snapshot'}</DialogTitle>
+                <DialogDescription className="truncate">
+                  {snapshot.author || 'Manual Commit'} • {safeTimeAgo()}
+                </DialogDescription>
+              </div>
+              <Button
+                onClick={handleRestore}
+                disabled={isRestoring}
+                className="shrink-0 flex items-center gap-2"
+              >
+                {isRestoring ? <Loader2 className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" />}
+                Restore Snapshot
+              </Button>
+            </DialogHeader>
 
-        <ScrollArea className="flex-1 overflow-hidden">
-          <Tabs
-            value={activeTab}
-            onValueChange={setActiveTab}
-            className="w-full px-6"
-          >
-            <TabsList className="grid w-full grid-cols-4 lg:grid-cols-8 mb-4">
-              <TabsTrigger value="identity" className="text-xs">Identity</TabsTrigger>
-              <TabsTrigger value="settings" className="text-xs">Settings</TabsTrigger>
-              <TabsTrigger value="rules" className="text-xs">Rules</TabsTrigger>
-              <TabsTrigger value="flairs" className="text-xs">Flairs</TabsTrigger>
-              <TabsTrigger value="widgets" className="text-xs">Widgets</TabsTrigger>
-              <TabsTrigger value="users" className="text-xs">Users</TabsTrigger>
-              <TabsTrigger value="automod" className="text-xs">Automod</TabsTrigger>
-            </TabsList>
+            <ScrollArea className="flex-1 overflow-hidden mt-2">
+              <Tabs
+                value={activeTab}
+                onValueChange={setActiveTab}
+                className="w-full px-6"
+              >
+                <TabsList className="grid w-full grid-cols-4 lg:grid-cols-8 mb-4">
+                  <TabsTrigger value="identity" className="text-xs">Identity</TabsTrigger>
+                  <TabsTrigger value="settings" className="text-xs">Settings</TabsTrigger>
+                  <TabsTrigger value="rules" className="text-xs">Rules</TabsTrigger>
+                  <TabsTrigger value="flairs" className="text-xs">Flairs</TabsTrigger>
+                  <TabsTrigger value="widgets" className="text-xs">Widgets</TabsTrigger>
+                  <TabsTrigger value="users" className="text-xs">Users</TabsTrigger>
+                  <TabsTrigger value="automod" className="text-xs">Automod</TabsTrigger>
+                </TabsList>
 
-            {/* Identity Tab */}
-            <TabsContent value="identity" className="mt-4 pb-6">
-              <IdentityTab data={data} />
-            </TabsContent>
+                {/* We safely cast the data, knowing it exists from our check above */}
+                <TabsContent value="identity" className="mt-4 pb-6">
+                  <IdentityTab data={snapshot.data as CommunitySnapshotData} />
+                </TabsContent>
 
-            {/* Settings Tab */}
-            <TabsContent value="settings" className="mt-4 pb-6">
-              <SettingsTab data={data} />
-            </TabsContent>
+                <TabsContent value="settings" className="mt-4 pb-6">
+                  <SettingsTab data={snapshot.data as CommunitySnapshotData} />
+                </TabsContent>
 
-            {/* Rules Tab */}
-            <TabsContent value="rules" className="mt-4 pb-6">
-              <RulesTab data={data} />
-            </TabsContent>
+                <TabsContent value="rules" className="mt-4 pb-6">
+                  <RulesTab data={snapshot.data as CommunitySnapshotData} />
+                </TabsContent>
 
-            {/* Flairs Tab */}
-            <TabsContent value="flairs" className="mt-4 pb-6">
-              <FlairsTab data={data} />
-            </TabsContent>
+                <TabsContent value="flairs" className="mt-4 pb-6">
+                  <FlairsTab data={snapshot.data as CommunitySnapshotData} />
+                </TabsContent>
 
-            {/* Widgets Tab */}
-            <TabsContent value="widgets" className="mt-4 pb-6">
-              <WidgetsTab data={data} />
-            </TabsContent>
+                <TabsContent value="widgets" className="mt-4 pb-6">
+                  <WidgetsTab data={snapshot.data as CommunitySnapshotData} />
+                </TabsContent>
 
-            {/* User Management Tab */}
-            <TabsContent value="users" className="mt-4 pb-6">
-              <UserManagementTab data={data} />
-            </TabsContent>
+                <TabsContent value="users" className="mt-4 pb-6">
+                  <UserManagementTab data={snapshot.data as CommunitySnapshotData} />
+                </TabsContent>
 
-            {/* Automoderator Tab */}
-            <TabsContent value="automod" className="mt-4 pb-6">
-              <AutomodTab data={data} />
-            </TabsContent>
-          </Tabs>
-        </ScrollArea>
+                <TabsContent value="automod" className="mt-4 pb-6">
+                  <AutomodTab data={snapshot.data as CommunitySnapshotData} />
+                </TabsContent>
+              </Tabs>
+            </ScrollArea>
+          </>
+        )}
       </DialogContent>
     </Dialog>
   );
 }
 
 function IdentityTab({ data }: { data: CommunitySnapshotData }) {
-  const identity = data.identity;
+  const identity = data?.identity;
   if (!identity) {
     return <div className="text-sm text-muted-foreground">No identity data available</div>;
   }
 
+  // Safe date helper for createdAt
+  const safeDate = (dateStr: string) => {
+    try {
+      const d = new Date(dateStr);
+      return isNaN(d.getTime()) ? 'N/A' : d.toLocaleDateString();
+    } catch {
+      return 'N/A';
+    }
+  };
+
   return (
     <div className="space-y-4 pr-4">
       <div className="grid grid-cols-2 gap-4">
-        <DetailField label="Display Name" value={identity.displayName} />
-        <DetailField label="Type" value={identity.subredditType} />
-        <DetailField label="Subscribers" value={identity.subscribers.toLocaleString()} />
-        <DetailField label="Language" value={identity.lang} />
+        <DetailField label="Display Name" value={identity.displayName || 'N/A'} />
+        <DetailField label="Type" value={identity.subredditType || 'N/A'} />
+        {/* SAFE toLocaleString using optional chaining to prevent type crashes */}
+        <DetailField label="Subscribers" value={identity.subscribers?.toLocaleString() ?? '0'} />
+        <DetailField label="Language" value={identity.lang || 'N/A'} />
         <DetailField label="NSFW" value={identity.nsfw ? 'Yes' : 'No'} />
-        <DetailField label="Created" value={new Date(identity.createdAt).toLocaleDateString()} />
+        <DetailField label="Created" value={safeDate(identity.createdAt)} />
       </div>
 
       <div className="space-y-2">
         <label className="text-sm font-medium">Title</label>
-        <div className="p-2 bg-muted rounded text-sm text-foreground line-clamp-2">{identity.title}</div>
+        <div className="p-2 bg-muted rounded text-sm text-foreground line-clamp-2">{identity.title || 'N/A'}</div>
       </div>
 
       <div className="space-y-2">
         <label className="text-sm font-medium">Description</label>
-        <div className="p-2 bg-muted rounded text-sm text-foreground max-h-20 overflow-auto line-clamp-4">{identity.description}</div>
+        <div className="p-2 bg-muted rounded text-sm text-foreground max-h-20 overflow-auto line-clamp-4">{identity.description || 'N/A'}</div>
       </div>
 
       <div className="space-y-2">
         <label className="text-sm font-medium">Public Description</label>
-        <div className="p-2 bg-muted rounded text-sm text-foreground max-h-20 overflow-auto line-clamp-4">{identity.publicDescription}</div>
+        <div className="p-2 bg-muted rounded text-sm text-foreground max-h-20 overflow-auto line-clamp-4">{identity.publicDescription || 'N/A'}</div>
       </div>
 
       <div className="grid grid-cols-2 gap-2">
@@ -176,7 +228,7 @@ function IdentityTab({ data }: { data: CommunitySnapshotData }) {
 }
 
 function SettingsTab({ data }: { data: CommunitySnapshotData }) {
-  const settings = data.settings;
+  const settings = data?.settings;
   if (!settings) {
     return <div className="text-sm text-muted-foreground pr-4">No settings data available</div>;
   }
@@ -191,7 +243,7 @@ function SettingsTab({ data }: { data: CommunitySnapshotData }) {
 }
 
 function RulesTab({ data }: { data: CommunitySnapshotData }) {
-  const rules = Array.isArray(data.rules) ? data.rules : [];
+  const rules = Array.isArray(data?.rules) ? data.rules : [];
 
   if (rules.length === 0) {
     return <div className="text-sm text-muted-foreground pr-4">No rules configured</div>;
@@ -216,8 +268,8 @@ function RulesTab({ data }: { data: CommunitySnapshotData }) {
 }
 
 function FlairsTab({ data }: { data: CommunitySnapshotData }) {
-  const postFlairs = data.flairs?.post ?? [];
-  const userFlairs = data.flairs?.user ?? [];
+  const postFlairs = data?.flairs?.post ?? [];
+  const userFlairs = data?.flairs?.user ?? [];
 
   return (
     <div className="space-y-6 pr-4">
@@ -261,7 +313,7 @@ function FlairBadge({ flair }: { flair: Record<string, unknown> }) {
 }
 
 function WidgetsTab({ data }: { data: CommunitySnapshotData }) {
-  const widgets = Array.isArray(data.widgets) ? data.widgets : [];
+  const widgets = Array.isArray(data?.widgets) ? data.widgets : [];
 
   if (widgets.length === 0) {
     return <div className="text-sm text-muted-foreground pr-4">No widgets configured</div>;
@@ -269,7 +321,7 @@ function WidgetsTab({ data }: { data: CommunitySnapshotData }) {
 
   return (
     <div className="space-y-2 pr-4">
-            {widgets.map((widget: Widget, idx: number) => (
+      {widgets.map((widget: Widget, idx: number) => (
         <Card key={idx} className="bg-card">
           <CardContent className="pt-6">
             <div className="text-sm">
@@ -285,7 +337,7 @@ function WidgetsTab({ data }: { data: CommunitySnapshotData }) {
 }
 
 function UserManagementTab({ data }: { data: CommunitySnapshotData }) {
-  const um = data.userManagement ?? { banned: [], muted: [], approved: [], moderators: [] };
+  const um = data?.userManagement ?? { banned: [], muted: [], approved: [], moderators: [] };
   const banned = Array.isArray(um.banned) ? um.banned : [];
   const muted = Array.isArray(um.muted) ? um.muted : [];
   const approved = Array.isArray(um.approved) ? um.approved : [];
@@ -311,8 +363,8 @@ function UserList({ title, users, count }: { title: string; users: Record<string
         <div className="space-y-1 max-h-40 overflow-auto">
           {users.map((user, idx) => (
             <div key={idx} className="flex items-center justify-between p-2 bg-muted rounded text-sm">
-              <span className="text-foreground font-mono">{(user.username as string) || 'Unknown'}</span>
-              {(user.note as string) && (
+              <span className="text-foreground font-mono">{(user?.username as string) || 'Unknown'}</span>
+              {(user?.note as string) && (
                 <span className="text-xs text-muted-foreground truncate ml-2">
                   {(user.note as string).slice(0, 30)}
                 </span>
@@ -335,8 +387,8 @@ function ModeratorsTable({ moderators, count }: { moderators: Record<string, unk
         <div className="space-y-1 max-h-40 overflow-auto">
           {moderators.map((mod, idx) => (
             <div key={idx} className="p-2 bg-muted rounded text-sm">
-              <div className="font-mono text-foreground">{(mod.username as string) || 'Unknown'}</div>
-              {Array.isArray(mod.permissions) && mod.permissions.length > 0 && (
+              <div className="font-mono text-foreground">{(mod?.username as string) || 'Unknown'}</div>
+              {Array.isArray(mod?.permissions) && mod.permissions.length > 0 && (
                 <div className="text-xs text-muted-foreground mt-1">
                   {(mod.permissions as string[]).join(', ')}
                 </div>
@@ -350,7 +402,7 @@ function ModeratorsTable({ moderators, count }: { moderators: Record<string, unk
 }
 
 function AutomodTab({ data }: { data: CommunitySnapshotData }) {
-  const automod = data.automoderator;
+  const automod = data?.automoderator;
 
   if (!automod || automod === 'Not configured') {
     return <div className="text-sm text-muted-foreground pr-4">Automoderator not configured</div>;
@@ -358,8 +410,9 @@ function AutomodTab({ data }: { data: CommunitySnapshotData }) {
 
   return (
     <div className="pr-4">
-      <pre className="bg-muted p-4 rounded text-xs overflow-auto max-h-96 text-foreground whitespace-pre-wrap wrap-break-word">
-        {automod}
+      {/* Changed CSS break-words so it's valid Tailwind */}
+      <pre className="bg-muted p-4 rounded text-xs overflow-auto max-h-96 text-foreground whitespace-pre-wrap break-words">
+        {String(automod)}
       </pre>
     </div>
   );
