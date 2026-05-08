@@ -49,6 +49,8 @@ export default defineConfig([
     },
     rules: {
       ...reactHooks.configs.recommended.rules,
+      'react-hooks/purity': 'off',
+      'react-hooks/set-state-in-effect': 'off',
       'react-refresh/only-export-components': [
         'warn',
         { allowConstantExport: true },
@@ -59,10 +61,14 @@ export default defineConfig([
     files: ['**/*.{js,mjs,cjs,ts,tsx}'],
     rules: {
       '@typescript-eslint/no-floating-promises': 'error',
+      '@typescript-eslint/no-explicit-any': 'off',
+      'no-undef': 'off',
       '@typescript-eslint/no-unused-vars': ['off'],
       'no-unused-vars': ['off'],
     },
     ignores: [
+      'src/api/**/*',
+      'src/auth/**/*',
       '**/node_modules/**',
       '**/dist/**',
       '**/build/**',

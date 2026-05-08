@@ -1,4 +1,3 @@
-'use client';
 
 import { CommitSnapshot } from '@/lib/types';
 import { formatDistanceToNow } from 'date-fns';

@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 import { Hono } from 'hono';
 import { context, redis, reddit } from '@devvit/web/server';
 import { computeSnapshotDiff } from '../../shared/snapshot-diff';
@@ -154,8 +153,8 @@ function buildVerificationResult(
   const totalAdditions = diffs.reduce((sum, diff) => sum + diff.additions, 0);
   const totalDeletions = diffs.reduce((sum, diff) => sum + diff.deletions, 0);
 
-  // Only restorable sections; others are not captured or applied
-  const restorableSections = new Set(['rules', 'flairs', 'automoderator']);
+  // Only writable sections are part of restore verification.
+  const restorableSections = new Set(['Rules', 'AutoModerator', 'Post Flairs', 'User Flairs']);
 
   const sections: VerificationSection[] = diffs.map(diff => ({
     section: diff.section,
@@ -306,18 +305,22 @@ function resolveAutomodPageName(wikiPages: unknown): string | null {
   return null;
 }
 
-// ─── Capture only restorable sections (Devvit Web API limitation) ──────────────
-// Devvit Web provides no write methods for: subreddit settings, appearance, widgets,
-// removal reasons, user management. Only the sections below can be restored.
+// ─── Capture restorable sections plus read-only metadata ──────────────────────
+// Devvit Web provides no write methods for subreddit settings / appearance / widgets.
+// We keep those fields in the snapshot for display only, but exclude them from restore.
 async function captureNormalizedSnapshot(subName: string): Promise<Record<string, unknown>> {
   const [
+    subredditInfo,
     rules,
     postFlairs,
     userFlairs,
+    subredditStyles,
   ] = await Promise.all([
+    safeFetch(() => reddit.getSubredditInfoByName(subName), null),
     safeFetch(() => reddit.getRules(subName), []),
     safeFetch(() => reddit.getPostFlairTemplates(subName), []),
     safeFetch(() => reddit.getUserFlairTemplates(subName), []),
+    safeFetch(() => reddit.getSubredditStyles(context.subredditId), null),
   ]);
 
   let automoderator = 'Not configured';
@@ -366,13 +369,71 @@ async function captureNormalizedSnapshot(subName: string): Promise<Record<string
     modOnly: f.modOnly ?? false,
   }));
 
+  const info = subredditInfo as any;
+  const styleSettings = subredditStyles && typeof subredditStyles === 'object'
+    ? (subredditStyles as Record<string, unknown>)
+    : {};
+  const communitySettings: Record<string, unknown> = {
+    ...styleSettings,
+    title: info?.title ?? '',
+    description: info?.description ?? '',
+    publicDescription: info?.publicDescription ?? '',
+    subredditType: info?.subredditType ?? info?.type ?? '',
+    nsfw: typeof info?.over18 === 'boolean' ? info.over18 : (info?.nsfw ?? false),
+    lang: info?.lang ?? 'en',
+    allowGalleries: info?.allowGalleries ?? null,
+    allowImages: info?.allowImages ?? null,
+    allowVideos: info?.allowVideos ?? null,
+    allowPolls: info?.allowPolls ?? null,
+  };
+
   return {
+    identity: info ? {
+      displayName: info.name ?? subName,
+      title: info.title ?? '',
+      description: info.description ?? '',
+      publicDescription: info.publicDescription ?? '',
+      subredditType: info.subredditType ?? info.type ?? '',
+      nsfw: typeof info.over18 === 'boolean' ? info.over18 : (info.nsfw ?? false),
+      subscribers: info.subscribers ?? 0,
+      createdAt: info.createdAt ?? '',
+      url: info.url ?? '',
+      lang: info.lang ?? 'en',
+      allowGalleries: info.allowGalleries ?? null,
+      allowImages: info.allowImages ?? null,
+      allowVideos: info.allowVideos ?? null,
+      allowPolls: info.allowPolls ?? null,
+      communityIcon: info.communityIcon ?? '',
+      bannerBackgroundImage: info.bannerBackgroundImage ?? '',
+      bannerImg: info.bannerImg ?? '',
+      keyColor: info.keyColor ?? '',
+      primaryColor: info.primaryColor ?? '',
+      iconColor: info.iconColor ?? '',
+    } : null,
+    settings: communitySettings,
     rules: normalizedRules,
     flairs: {
       post: normalizedPostFlairs,
       user: normalizedUserFlairs,
     },
     automoderator,
+    wikiPages: [],
+    removalReasons: [],
+    widgets: null,
+    userManagement: {
+      banned: [],
+      muted: [],
+      approved: [],
+      moderators: [],
+    },
+    limitations: {
+      cssStylesheet: 'Read-only metadata only',
+      emojis: 'Read-only metadata only',
+      chatChannels: 'Read-only metadata only',
+      modNotes: 'Read-only metadata only',
+      safetyFilters: 'Read-only metadata only',
+      banEventsHistory: 'Read-only metadata only',
+    },
     capturedAt: new Date().toISOString(),
   };
 }

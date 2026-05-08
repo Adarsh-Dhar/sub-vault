@@ -17,7 +17,7 @@ export function StatsCard({ icon: Icon, title, value, subtitle }: StatsCardProps
           <p className="text-2xl sm:text-3xl font-bold text-foreground mt-2">{value}</p>
           {subtitle && <p className="text-xs text-muted-foreground/70 mt-1">{subtitle}</p>}
         </div>
-        <Icon className="h-6 w-6 sm:h-8 sm:w-8 text-primary opacity-80 flex-shrink-0" />
+        <Icon className="h-6 w-6 sm:h-8 sm:w-8 text-primary opacity-80 shrink-0" />
       </div>
     </Card>
   );

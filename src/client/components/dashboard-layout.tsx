@@ -1,4 +1,3 @@
-'use client';
 import React, { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Vault, Menu, X } from 'lucide-react';
@@ -22,7 +21,7 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
 
         {/* Main header row */}
         <div className="max-w-7xl mx-auto px-3 sm:px-6 py-3 sm:py-4 flex items-center justify-between">
-          <Link to="/" className="flex items-center gap-2 sm:gap-3 flex-shrink-0">
+          <Link to="/" className="flex items-center gap-2 sm:gap-3 shrink-0">
             <div className="p-2 bg-primary rounded-lg">
               <Vault className="h-5 w-5 sm:h-6 sm:w-6 text-primary-foreground" />
             </div>

@@ -1,5 +1,4 @@
 /* eslint-disable @typescript-eslint/no-floating-promises */
-'use client';
 import { useState, useMemo, useEffect } from 'react';
 import { DashboardLayout } from '../components/dashboard-layout';
 import { TopNavigation } from '../components/top-navigation';

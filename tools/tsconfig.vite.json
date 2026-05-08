@@ -2,8 +2,7 @@
   "extends": "./tsconfig.base.json",
   "compilerOptions": {
     "outDir": "../dist/types/tools",
-    "tsBuildInfoFile": "../dist/types/tools/tsconfig.vite.tsbuildinfo",
-    "ignoreDeprecations": "5.0",
+    "tsBuildInfoFile": "../dist/types/tools/tsconfig.tsbuildinfo",
     "types": ["node"],
     "rootDir": ".."
   },

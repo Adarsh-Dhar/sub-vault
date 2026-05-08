@@ -1,5 +1,4 @@
 /* eslint-disable @typescript-eslint/no-floating-promises */
-'use client';
 import { useMemo, useState, useEffect } from 'react';
 import { ArrowLeft, Download } from 'lucide-react';
 import { DashboardLayout } from '../components/dashboard-layout';

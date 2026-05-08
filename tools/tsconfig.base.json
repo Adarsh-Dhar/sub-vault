@@ -2,7 +2,7 @@
   "$schema": "https://json.schemastore.org/tsconfig.json",
   "compilerOptions": {
     "composite": true,
-    "baseUrl": "..",
+    "ignoreDeprecations": "6.0",
     "allowUnreachableCode": false,
     "allowUnusedLabels": false,
     "exactOptionalPropertyTypes": true,
@@ -26,7 +26,7 @@
     "lib": ["DOM", "ES2023", "esnext.disposable"],
     "jsx": "react-jsx",
     "paths": {
-      "@/*": ["src/client/*"]
+      "@/*": ["../src/client/*"]
     }
   }
 }

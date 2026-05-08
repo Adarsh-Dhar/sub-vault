@@ -100,6 +100,11 @@ const SECTIONS: Array<{
   extract: (d: SnapshotData) => unknown;
 }> = [
   {
+    key: 'identity',
+    label: 'Identity',
+    extract: d => d['identity'],
+  },
+  {
     key: 'rules',
     label: 'Rules',
     extract: d => d['rules'],

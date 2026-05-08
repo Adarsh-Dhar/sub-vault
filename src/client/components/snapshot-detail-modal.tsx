@@ -1,4 +1,3 @@
-'use client';
 
 import { useEffect, useRef, useState } from 'react';
 import { Loader2, RotateCcw, CheckCircle2, AlertTriangle, XCircle, ChevronDown, ChevronUp } from 'lucide-react';
@@ -338,6 +337,14 @@ export function SnapshotDetailModal({
     }
   };
 
+  const safeStringify = (value: unknown) => {
+    try {
+      return JSON.stringify(value ?? {}, null, 2);
+    } catch {
+      return '{\n  "error": "Unable to render settings payload"\n}';
+    }
+  };
+
   const renderKeyValues = (data: CommunitySnapshotData) => {
     const identity = data.identity;
     const settings = data.settings;
@@ -353,6 +360,8 @@ export function SnapshotDetailModal({
           <div className="mt-3 space-y-1 text-sm text-slate-600">
             <div>Name: <span className="text-slate-900">{identity?.displayName || 'N/A'}</span></div>
             <div>Type: <span className="text-slate-900">{identity?.subredditType || 'N/A'}</span></div>
+            <div>Description: <span className="text-slate-900">{identity?.description || 'N/A'}</span></div>
+            <div>Public description: <span className="text-slate-900">{identity?.publicDescription || 'N/A'}</span></div>
             <div>Subscribers: <span className="text-slate-900">{typeof identity?.subscribers === 'number' ? identity.subscribers.toLocaleString() : '0'}</span></div>
             <div>Language: <span className="text-slate-900">{identity?.lang || 'N/A'}</span></div>
           </div>
@@ -371,7 +380,7 @@ export function SnapshotDetailModal({
         <section className="rounded-lg border border-slate-200 bg-slate-50 p-4">
           <h3 className="text-sm font-semibold text-slate-900">Settings</h3>
           <pre className="mt-3 max-h-60 overflow-auto rounded bg-white p-3 text-xs text-slate-900 whitespace-pre-wrap wrap-break-word border border-slate-200">
-            {JSON.stringify(settings ?? {}, null, 2)}
+            {safeStringify(settings)}
           </pre>
         </section>
 
@@ -403,61 +412,61 @@ export function SnapshotDetailModal({
         aria-label="Snapshot details"
       >
         {isLoading ? (
-          <div className="flex min-h-70 flex-col">
-            <div className="flex items-start justify-between gap-4 border-b px-6 py-4">
+          <div className="flex min-h-96 flex-col border-b border-slate-200">
+            <div className="flex items-start justify-between gap-4 px-6 py-4">
               <div>
-                <h2 className="text-lg font-semibold text-foreground">Snapshot Details</h2>
-                <p className="mt-1 text-sm text-muted-foreground">Loading snapshot data...</p>
+                <h2 className="text-lg font-semibold text-slate-900">Snapshot Details</h2>
+                <p className="mt-1 text-sm text-slate-600">Loading snapshot data...</p>
               </div>
               <Button variant="ghost" size="sm" onClick={handleClose} type="button">
                 Close
               </Button>
             </div>
-            <div className="flex flex-1 items-center justify-center gap-3 p-8 text-muted-foreground">
+            <div className="flex flex-1 items-center justify-center gap-3 p-8 text-slate-600">
               <Loader2 className="h-5 w-5 animate-spin" />
               Loading snapshot details
             </div>
           </div>
         ) : error ? (
-          <div className="flex min-h-70 flex-col">
-            <div className="flex items-start justify-between gap-4 border-b px-6 py-4">
+          <div className="flex min-h-96 flex-col border-b border-slate-200">
+            <div className="flex items-start justify-between gap-4 px-6 py-4">
               <div>
-                <h2 className="text-lg font-semibold text-foreground">Snapshot Details</h2>
-                <p className="mt-1 text-sm text-muted-foreground">Unable to load the selected snapshot.</p>
+                <h2 className="text-lg font-semibold text-slate-900">Snapshot Details</h2>
+                <p className="mt-1 text-sm text-slate-600">Unable to load the selected snapshot.</p>
               </div>
               <Button variant="ghost" size="sm" onClick={handleClose} type="button">
                 Close
               </Button>
             </div>
-            <div className="flex flex-1 items-center justify-center p-8 text-center text-sm text-destructive">
+            <div className="flex flex-1 items-center justify-center p-8 text-center text-sm text-red-600">
               {error}
             </div>
           </div>
         ) : !snapshot || !snapshot.data ? (
-          <div className="flex min-h-70 flex-col">
-            <div className="flex items-start justify-between gap-4 border-b px-6 py-4">
+          <div className="flex min-h-96 flex-col border-b border-slate-200">
+            <div className="flex items-start justify-between gap-4 px-6 py-4">
               <div>
-                <h2 className="text-lg font-semibold text-foreground">Snapshot Details</h2>
-                <p className="mt-1 text-sm text-muted-foreground">No snapshot data was returned.</p>
+                <h2 className="text-lg font-semibold text-slate-900">Snapshot Details</h2>
+                <p className="mt-1 text-sm text-slate-600">No snapshot data was returned.</p>
               </div>
               <Button variant="ghost" size="sm" onClick={handleClose} type="button">
                 Close
               </Button>
             </div>
-            <div className="flex flex-1 items-center justify-center p-8 text-center text-sm text-muted-foreground">
+            <div className="flex flex-1 items-center justify-center p-8 text-center text-sm text-slate-600">
               No data available for this snapshot
             </div>
           </div>
         ) : (
           <>
             {/* Header */}
-            <div className="shrink-0 border-b px-6 py-4">
+            <div className="shrink-0 border-b border-slate-200 px-6 py-4">
               <div className="flex items-start justify-between gap-4">
                 <div className="min-w-0 text-left">
-                  <h2 className="truncate text-lg font-semibold text-foreground">
+                  <h2 className="truncate text-lg font-semibold text-slate-900">
                     {snapshot.message || 'Snapshot'}
                   </h2>
-                  <p className="truncate text-sm text-muted-foreground">
+                  <p className="truncate text-sm text-slate-600">
                     {snapshot.author || 'Manual Commit'} • {safeTimeAgo()}
                   </p>
                 </div>
@@ -525,8 +534,12 @@ export function SnapshotDetailModal({
             </div>
 
             {/* Body */}
-            <div className="flex-1 overflow-y-auto px-6 py-4">
-              {renderKeyValues(snapshot.data as CommunitySnapshotData)}
+            <div className="flex-1 overflow-y-auto px-6 py-4 min-h-0">
+              {snapshot.data ? renderKeyValues(snapshot.data as CommunitySnapshotData) : (
+                <div className="flex items-center justify-center p-8 text-center text-sm text-slate-600">
+                  No snapshot data available
+                </div>
+              )}
             </div>
           </>
         )}

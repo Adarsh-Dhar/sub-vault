@@ -1,4 +1,3 @@
-'use client'
 
 import { useToast } from './use-toast'
 import {

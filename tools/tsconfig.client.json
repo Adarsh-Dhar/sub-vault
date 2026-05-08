@@ -3,7 +3,7 @@
   "compilerOptions": {
     "outDir": "../dist/types/client",
     "tsBuildInfoFile": "../dist/types/client/tsconfig.tsbuildinfo",
-    "ignoreDeprecations": "5.0",
+    "ignoreDeprecations": "6.0",
     "customConditions": ["browser"],
     "rootDir": "../src/client"
   },

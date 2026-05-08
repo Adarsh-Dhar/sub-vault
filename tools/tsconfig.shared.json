@@ -6,7 +6,7 @@
     "outDir": "../dist/types/shared",
 
     "tsBuildInfoFile": "../dist/types/shared/tsconfig.tsbuildinfo",
-    "ignoreDeprecations": "5.0",
+    "ignoreDeprecations": "6.0",
 
     "rootDir": "../src/shared"
   },
