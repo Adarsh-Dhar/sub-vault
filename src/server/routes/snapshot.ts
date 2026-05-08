@@ -4,6 +4,18 @@ import { computeSnapshotDiff } from '../../shared/snapshot-diff';
 
 export const snapshot = new Hono();
 
+// ─── Constants ────────────────────────────────────────────────────────────────
+
+const DEFAULT_AUTOMOD_PAGE = 'config/automoderator';
+const AUTOMOD_CANDIDATES = ['config/automoderator', 'automoderator'] as const;
+const VERIFICATION_MAX_ATTEMPTS = 18;
+const VERIFICATION_POLL_INTERVAL_MS = 10_000;
+const POLLING_SESSION_TTL_SECONDS = 60 * 30;
+
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+type SnapshotStatus = 'success' | 'warning' | 'error';
+
 type SnapshotListItem = {
   id: string;
   author: string;
@@ -11,14 +23,14 @@ type SnapshotListItem = {
   message: string;
   timestamp: string;
   changes: number;
-  status: 'success' | 'warning' | 'error';
+  status: SnapshotStatus;
 };
 
 type StoredSnapshot = {
-  id?: string;
-  message?: string;
-  data?: Record<string, unknown>;
-  createdAt?: string;
+  id: string;
+  message: string;
+  data: Record<string, unknown>;
+  createdAt: string;
 };
 
 type VerificationSection = {
@@ -54,79 +66,11 @@ type PollingSession = {
   completedAt?: string;
 };
 
-const VERIFICATION_POLL_INTERVAL_MS = 10_000;
-const VERIFICATION_MAX_ATTEMPTS = 18;
-const POLLING_SESSION_TTL_SECONDS = 60 * 30;
+// ─── Small Utilities ──────────────────────────────────────────────────────────
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
-function parseStoredSnapshot(raw: string): StoredSnapshot | null {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    return null;
-  }
-  if (typeof parsed !== 'object' || parsed === null) return null;
-
-  const candidate = parsed as Record<string, unknown>;
-  const snap: StoredSnapshot = {};
-
-  if (typeof candidate['id'] === 'string') snap.id = candidate['id'];
-  if (typeof candidate['message'] === 'string') snap.message = candidate['message'];
-  if (typeof candidate['createdAt'] === 'string') snap.createdAt = candidate['createdAt'];
-  if (typeof candidate['data'] === 'object' && candidate['data'] !== null) {
-    snap.data = candidate['data'] as Record<string, unknown>;
-  }
-
-  return snap;
-}
-
-function toListItem(parsed: StoredSnapshot): SnapshotListItem {
-  const snapshotId = parsed.id ?? 'unknown';
-  const message = parsed.message ?? 'Snapshot created';
-  const timestampRaw = snapshotId.replace(/\D/g, '');
-  const fallbackTimestamp =
-    timestampRaw.length > 0
-      ? new Date(Number.parseInt(timestampRaw, 10)).toISOString()
-      : new Date(0).toISOString();
-
-  let author = 'Manual Commit';
-  if (message.startsWith('Restored from:')) {
-    author = 'Restore';
-  } else {
-    const match = message.match(/— by (.+)$/);
-    if (match?.[1]) {
-      author = match[1];
-    }
-  }
-
-  return {
-    id: snapshotId,
-    author,
-    hash: timestampRaw.slice(-7),
-    message,
-    timestamp: parsed.createdAt ?? fallbackTimestamp,
-    changes: Object.keys(parsed.data ?? {}).length,
-    status: 'success',
-  };
-}
-
-async function getAllSnapshotsSorted(): Promise<StoredSnapshot[]> {
-  const snapshotMap = await redis.hGetAll('snapshot_backups');
-  const snapshots: StoredSnapshot[] = [];
-  for (const raw of Object.values(snapshotMap)) {
-    const parsed = parseStoredSnapshot(raw);
-    if (parsed) snapshots.push(parsed);
-  }
-  snapshots.sort((a, b) => {
-    const ta = a.createdAt ? new Date(a.createdAt).getTime() : 0;
-    const tb = b.createdAt ? new Date(b.createdAt).getTime() : 0;
-    return tb - ta;
-  });
-  return snapshots;
-}
-
+/**
+ * Safely call an async function, returning `fallback` on any error.
+ */
 async function safeFetch<T>(fn: () => Promise<T>, fallback: T): Promise<T> {
   try {
     return await fn();
@@ -136,177 +80,139 @@ async function safeFetch<T>(fn: () => Promise<T>, fallback: T): Promise<T> {
   }
 }
 
-async function loadStoredSnapshot(snapshotId: string): Promise<StoredSnapshot | null> {
-  let raw = await redis.get(`snapshot:${snapshotId}`);
-  if (!raw) {
-    const snapshotMap = await redis.hGetAll('snapshot_backups');
-    raw = snapshotMap[snapshotId];
-  }
-  if (!raw) return null;
-  return parseStoredSnapshot(raw);
-}
-
-async function readAllDevvitSettings(): Promise<Record<string, unknown>> {
-  const api = settings as unknown as {
-    getAll?: () => Promise<Record<string, unknown>>;
-    get: (key: string) => Promise<unknown>;
-  };
-
-  try {
-    if (typeof api.getAll === 'function') {
-      const all = await api.getAll();
-      return all && typeof all === 'object' ? all : {};
-    }
-    const fallbackKeys = ['apiKey', 'welcomeMessage', 'description', 'publicDescription'];
-    const entries = await Promise.all(
-      fallbackKeys.map(async key => {
-        try {
-          const value = await api.get(key);
-          return [key, value] as const;
-        } catch {
-          return [key, undefined] as const;
-        }
-      }),
-    );
-    return Object.fromEntries(entries.filter(([, value]) => value !== undefined));
-  } catch (err) {
-    console.warn('[SubVault] Failed to read Devvit app settings:', String(err).slice(0, 200));
-    return {};
-  }
-}
-
-// ─── extractString: safely pulls a string from Devvit's wrapped field objects ─
-// e.g. description comes as { markdown: "1" } not "1"
+/**
+ * Devvit wraps some text fields (like `description`) in objects like
+ * `{ markdown: "..." }`. This function unwraps them recursively.
+ */
 function extractString(v: unknown): string {
   if (typeof v === 'string') return v;
   if (typeof v === 'number' || typeof v === 'boolean') return String(v);
   if (Array.isArray(v)) {
-    return v.map(item => extractString(item)).filter(Boolean).join('\n').trim();
+    return v.map(extractString).filter(Boolean).join('\n').trim();
   }
   if (v && typeof v === 'object') {
     const o = v as Record<string, unknown>;
-    const orderedKeys = ['markdown', 'text', 'plainText', 'content', 'value', 'body'];
-    for (const key of orderedKeys) {
-      if (!(key in o)) continue;
-      const candidate = extractString(o[key]);
-      if (candidate) return candidate;
+    for (const key of ['markdown', 'text', 'plainText', 'content', 'value', 'body']) {
+      if (key in o) {
+        const result = extractString(o[key]);
+        if (result) return result;
+      }
     }
-    for (const candidateValue of Object.values(o)) {
-      const candidate = extractString(candidateValue);
-      if (candidate) return candidate;
+    for (const val of Object.values(o)) {
+      const result = extractString(val);
+      if (result) return result;
     }
   }
   return '';
 }
 
-// ─── Verification ─────────────────────────────────────────────────────────────
+/**
+ * Returns the correct automod wiki page name from a list of wiki pages,
+ * or null if none match.
+ */
+function resolveAutomodPage(wikiPages: unknown): string | null {
+  const pages = Array.isArray(wikiPages) ? wikiPages.map(String) : [];
+  const normalized = new Map(pages.map(p => [p.trim().toLowerCase(), p]));
+  for (const candidate of AUTOMOD_CANDIDATES) {
+    const found = normalized.get(candidate);
+    if (found) return found;
+  }
+  return null;
+}
 
-export function buildVerificationResult(
-  targetData: Record<string, unknown>,
-  liveData: Record<string, unknown>,
-): VerificationResult {
-  function normalizeForDiff(data: Record<string, unknown>): Record<string, unknown> {
-    try {
-      const copy = JSON.parse(JSON.stringify(data));
-      const id = copy.identity;
-      if (id && typeof id === 'object') {
-        if ('description' in id) id.description = extractString(id.description);
-        if ('publicDescription' in id) id.publicDescription = extractString(id.publicDescription);
-        if ('displayName' in id) id.displayName = extractString(id.displayName);
-        if ('lang' in id) id.lang = extractString(id.lang);
-      }
-      return copy;
-    } catch (_) {
-      return data;
-    }
+/**
+ * Verify the current user has wiki moderator permission on the subreddit.
+ * Throws if they don't.
+ */
+async function assertWikiAccess(subredditName: string): Promise<void> {
+  const username = await safeFetch(() => reddit.getCurrentUsername(), '');
+  if (!username) throw new Error('Cannot determine current Reddit account');
+
+  const mods: Array<{ username: string; permissions: string[] }> = [];
+  for await (const m of reddit.getModerators({ subredditName })) {
+    mods.push({ username: m.username, permissions: (m as any).permissions ?? [] });
+    if (mods.length >= 200) break;
   }
 
-  const diffs = computeSnapshotDiff(normalizeForDiff(targetData), normalizeForDiff(liveData));
-  const totalAdditions = diffs.reduce((sum, diff) => sum + diff.additions, 0);
-  const totalDeletions = diffs.reduce((sum, diff) => sum + diff.deletions, 0);
+  const self = mods.find(m => m.username.toLowerCase() === username.toLowerCase());
+  if (!self) throw new Error(`@${username} is not a moderator of r/${subredditName}`);
 
-  const restorableSections = new Set(['Identity', 'Rules', 'AutoModerator', 'Post Flairs', 'User Flairs']);
+  const perms = self.permissions;
+  const hasAll = perms.length === 0 || perms.some(p => ['all', 'everything', '*'].includes(p));
+  const hasWiki = perms.includes('wiki');
 
-  const sections: VerificationSection[] = diffs.map(diff => ({
-    section: diff.section,
-    additions: diff.additions,
-    deletions: diff.deletions,
-    status: restorableSections.has(diff.section) ? 'drifted' : 'skipped',
-  }));
+  if (!hasAll && !hasWiki) {
+    throw new Error(`@${username} needs the wiki moderator permission for r/${subredditName}`);
+  }
+}
 
+// ─── Redis Helpers ────────────────────────────────────────────────────────────
+
+function parseStoredSnapshot(raw: string): StoredSnapshot | null {
   try {
-    const tNorm = normalizeForDiff(targetData) as Record<string, any>;
-    const lNorm = normalizeForDiff(liveData) as Record<string, any>;
-    const tDesc = tNorm?.identity && typeof tNorm.identity === 'object' ? String(tNorm.identity.description ?? '') : '';
-    const lDesc = lNorm?.identity && typeof lNorm.identity === 'object' ? String(lNorm.identity.description ?? '') : '';
-    const tPubDesc = tNorm?.identity && typeof tNorm.identity === 'object' ? String(tNorm.identity.publicDescription ?? '') : '';
-    const lPubDesc = lNorm?.identity && typeof lNorm.identity === 'object' ? String(lNorm.identity.publicDescription ?? '') : '';
-
-    console.log('[SubVault] Identity verification check:', {
-      targetDescription: tDesc,
-      liveDescription: lDesc,
-      descriptionMatch: tDesc === lDesc,
-      targetPublicDescription: tPubDesc,
-      livePublicDescription: lPubDesc,
-      publicDescriptionMatch: tPubDesc === lPubDesc,
-      targetIdentity: JSON.stringify(tNorm?.identity).slice(0, 200),
-      liveIdentity: JSON.stringify(lNorm?.identity).slice(0, 200),
-    });
-
-    if (tDesc !== lDesc || tPubDesc !== lPubDesc) {
-      console.log('[SubVault] Identity description mismatch detected — marking verification as failed');
-      const identitySection = sections.find(s => s.section === 'Identity');
-      if (identitySection) {
-        identitySection.status = 'drifted';
-      } else {
-        sections.push({ section: 'Identity', additions: 1, deletions: 1, status: 'drifted' });
-      }
-    }
-  } catch (e) {
-    console.warn('[SubVault] identity description check failed:', String(e).slice(0, 200));
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    if (!parsed || typeof parsed !== 'object') return null;
+    if (typeof parsed['id'] !== 'string') return null;
+    if (typeof parsed['message'] !== 'string') return null;
+    if (typeof parsed['createdAt'] !== 'string') return null;
+    if (typeof parsed['data'] !== 'object' || !parsed['data']) return null;
+    return {
+      id: parsed['id'],
+      message: parsed['message'],
+      createdAt: parsed['createdAt'],
+      data: parsed['data'] as Record<string, unknown>,
+    };
+  } catch {
+    return null;
   }
+}
 
-  const realDrift = sections.filter(section => section.status === 'drifted');
-  const notes: string[] = [];
+function toListItem(snap: StoredSnapshot): SnapshotListItem {
+  const digits = snap.id.replace(/\D/g, '');
+  const fallbackTs = digits.length > 0
+    ? new Date(parseInt(digits, 10)).toISOString()
+    : new Date(0).toISOString();
 
-  if (realDrift.length === 0) {
-    notes.push('All restored sections match the live subreddit — restore verified successfully. ✓');
+  let author = 'Manual Commit';
+  if (snap.message.startsWith('Restored from:')) {
+    author = 'Restore';
   } else {
-    for (const section of sections) {
-      if (section.status === 'drifted') {
-        notes.push(
-          `${section.section}: live state still differs from snapshot (+${section.additions} / -${section.deletions}). ` +
-          'Reddit may need a moment to propagate changes, or the Devvit API had a temporary error.',
-        );
-      }
-    }
+    const match = snap.message.match(/— by (.+)$/);
+    if (match?.[1]) author = match[1];
   }
 
   return {
-    sectionsChanged: realDrift.length,
-    totalAdditions,
-    totalDeletions,
-    sections,
-    verifiedAt: new Date().toISOString(),
-    verified: realDrift.length === 0,
-    notes,
+    id: snap.id,
+    author,
+    hash: digits.slice(-7),
+    message: snap.message,
+    timestamp: snap.createdAt ?? fallbackTs,
+    changes: Object.keys(snap.data).length,
+    status: 'success',
   };
 }
 
-async function saveVerificationSnapshot(
-  snapshotId: string,
-  message: string,
-  data: Record<string, unknown>,
-): Promise<void> {
-  const payload = JSON.stringify({
-    id: snapshotId,
-    message,
-    data,
-    createdAt: new Date().toISOString(),
-  });
+async function getAllSnapshotsSorted(): Promise<StoredSnapshot[]> {
+  const map = await redis.hGetAll('snapshot_backups');
+  const snaps: StoredSnapshot[] = [];
+  for (const raw of Object.values(map)) {
+    const parsed = parseStoredSnapshot(raw);
+    if (parsed) snaps.push(parsed);
+  }
+  snaps.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  return snaps;
+}
+
+async function loadSnapshot(id: string): Promise<StoredSnapshot | null> {
+  const raw = await redis.get(`snapshot:${id}`) ?? (await redis.hGetAll('snapshot_backups'))[id];
+  return raw ? parseStoredSnapshot(raw) : null;
+}
+
+async function saveSnapshot(snap: StoredSnapshot): Promise<void> {
+  const payload = JSON.stringify(snap);
   await Promise.all([
-    redis.set(`snapshot:${snapshotId}`, payload),
-    redis.hSet('snapshot_backups', { [snapshotId]: payload }),
+    redis.set(`snapshot:${snap.id}`, payload),
+    redis.hSet('snapshot_backups', { [snap.id]: payload }),
   ]);
 }
 
@@ -314,24 +220,21 @@ async function readPollingSession(pollingId: string): Promise<PollingSession | n
   const raw = await redis.get(`polling:${pollingId}`);
   if (!raw) return null;
   try {
-    const parsed = JSON.parse(raw) as Partial<PollingSession>;
-    if (!parsed || typeof parsed !== 'object') return null;
+    const p = JSON.parse(raw) as Partial<PollingSession>;
     return {
-      pollingId: String(parsed.pollingId ?? pollingId),
-      restoreId: String(parsed.restoreId ?? ''),
-      targetId: String(parsed.targetId ?? ''),
-      subName: String(parsed.subName ?? ''),
-      currentAttempt: typeof parsed.currentAttempt === 'number' ? parsed.currentAttempt : 0,
-      maxAttempts: typeof parsed.maxAttempts === 'number' ? parsed.maxAttempts : VERIFICATION_MAX_ATTEMPTS,
-      isActive: parsed.isActive !== false,
-      verified: parsed.verified === true,
-      timedOut: parsed.timedOut === true,
-      lastAttemptAt: typeof parsed.lastAttemptAt === 'string' ? parsed.lastAttemptAt : undefined,
-      lastVerification: parsed.lastVerification && typeof parsed.lastVerification === 'object'
-        ? (parsed.lastVerification as VerificationResult)
-        : undefined,
-      createdAt: typeof parsed.createdAt === 'string' ? parsed.createdAt : new Date().toISOString(),
-      completedAt: typeof parsed.completedAt === 'string' ? parsed.completedAt : undefined,
+      pollingId: String(p.pollingId ?? pollingId),
+      restoreId: String(p.restoreId ?? ''),
+      targetId: String(p.targetId ?? ''),
+      subName: String(p.subName ?? ''),
+      currentAttempt: typeof p.currentAttempt === 'number' ? p.currentAttempt : 0,
+      maxAttempts: typeof p.maxAttempts === 'number' ? p.maxAttempts : VERIFICATION_MAX_ATTEMPTS,
+      isActive: p.isActive !== false,
+      verified: p.verified === true,
+      timedOut: p.timedOut === true,
+      lastAttemptAt: typeof p.lastAttemptAt === 'string' ? p.lastAttemptAt : undefined,
+      lastVerification: p.lastVerification ?? null,
+      createdAt: typeof p.createdAt === 'string' ? p.createdAt : new Date().toISOString(),
+      completedAt: typeof p.completedAt === 'string' ? p.completedAt : undefined,
     };
   } catch {
     return null;
@@ -343,219 +246,138 @@ async function writePollingSession(session: PollingSession): Promise<void> {
   await redis.expire(`polling:${session.pollingId}`, POLLING_SESSION_TTL_SECONDS);
 }
 
-// ─── Wiki / AutoMod helpers ───────────────────────────────────────────────────
+// ─── Devvit Settings ──────────────────────────────────────────────────────────
 
-const DEFAULT_AUTOMOD_PAGE = 'config/automoderator' as const;
-const AUTOMOD_PAGE_CANDIDATES = [DEFAULT_AUTOMOD_PAGE, 'automoderator'] as const;
-
-function normalizePageName(page: string): string {
-  return page.trim().toLowerCase();
-}
-
-async function ensureWikiReadAccess(subredditName: string): Promise<void> {
-  const currentUsername = await safeFetch(() => reddit.getCurrentUsername(), '');
-  if (!currentUsername) {
-    throw new Error('Unable to determine the current Reddit account for wiki access checks');
-  }
-
-  const moderators = await safeFetch(async () => {
-    const listing: Array<Record<string, unknown>> = [];
-    for await (const mod of reddit.getModerators({ subredditName })) {
-      listing.push({ username: mod.username, permissions: (mod as any).permissions ?? [] });
-      if (listing.length >= 200) break;
+async function readDevvitSettings(): Promise<Record<string, unknown>> {
+  const api = settings as unknown as {
+    getAll?: () => Promise<Record<string, unknown>>;
+    get: (key: string) => Promise<unknown>;
+  };
+  try {
+    if (typeof api.getAll === 'function') {
+      const all = await api.getAll();
+      return all && typeof all === 'object' ? all : {};
     }
-    return listing;
-  }, [] as Array<Record<string, unknown>>);
-
-  const moderator = moderators.find(
-    mod => String(mod.username ?? '').toLowerCase() === currentUsername.toLowerCase(),
-  );
-
-  if (!moderator) {
-    throw new Error(`@${currentUsername} is not a moderator of r/${subredditName}`);
-  }
-
-  const permissions = Array.isArray(moderator.permissions)
-    ? moderator.permissions.map(permission => String(permission))
-    : [];
-
-  console.log(
-    `[SubVault] Permission check for @${currentUsername} - permissions array:`,
-    JSON.stringify(permissions),
-  );
-
-  const hasWikiPermission = permissions.includes('wiki');
-  const hasAllPermissions =
-    permissions.length === 0 ||
-    permissions.includes('all') ||
-    permissions.includes('everything') ||
-    permissions.includes('*');
-
-  if (!hasWikiPermission && !hasAllPermissions) {
-    throw new Error(`@${currentUsername} needs the wiki moderator permission for r/${subredditName}`);
+    const keys = ['apiKey', 'welcomeMessage', 'description', 'publicDescription'];
+    const pairs = await Promise.all(keys.map(async k => [k, await api.get(k).catch(() => undefined)] as const));
+    return Object.fromEntries(pairs.filter(([, v]) => v !== undefined));
+  } catch (err) {
+    console.warn('[SubVault] Failed to read Devvit settings:', String(err).slice(0, 200));
+    return {};
   }
 }
 
-function resolveAutomodPageName(wikiPages: unknown): string | null {
-  const pages = Array.isArray(wikiPages) ? wikiPages.map(page => String(page)) : [];
-  const normalizedPages = new Map(pages.map(page => [normalizePageName(page), page] as const));
-  for (const candidate of AUTOMOD_PAGE_CANDIDATES) {
-    const resolved = normalizedPages.get(normalizePageName(candidate));
-    if (resolved) return resolved;
-  }
-  return null;
-}
-
-// ─── Snapshot capture ─────────────────────────────────────────────────────────
+// ─── Community Snapshot Capture ───────────────────────────────────────────────
 //
-// Field map confirmed from runtime debug of getSubredditInfoByName response:
+// What IS available via Devvit API (confirmed via runtime debug):
+//   info.name, title, description (wrapped object), type, isNsfw, subscribersCount,
+//   activeCount, createdAt, id, isQuarantined, detectedLanguage,
+//   isPostingRestricted, isCommentingRestricted, isCrosspostingAllowed,
+//   isArchivePostsEnabled, isDiscoveryAllowed, isSpoilerAvailable,
+//   isChatPostCreationAllowed, isChatPostFeatureEnabled, isEmojisEnabled,
+//   isPredictionAllowed, isPredictionsTournamentAllowed, isPredictionContributorsAllowed,
+//   allAllowedPostTypes, allowedPostCapabilities, allowedMediaInComments,
+//   authorFlairSettings.isEnabled, authorFlairSettings.isSelfAssignable,
+//   postFlairSettings.isEnabled, postFlairSettings.isSelfAssignable,
+//   wikiSettings.wikiEditMode
 //
-//  AVAILABLE in Devvit API:
-//   info.name                     → display name
-//   info.title                    → community title
-//   info.description.markdown     → sidebar description (wrapped object)
-//   info.type                     → subreddit type (public/private/restricted)
-//   info.isNsfw                   → NSFW flag
-//   info.subscribersCount         → subscriber count
-//   info.createdAt                → creation timestamp
-//   info.id                       → subreddit fullname (t5_xxx)
-//   info.isChatPostCreationAllowed
-//   info.isChatPostFeatureEnabled
-//   info.isCommentingRestricted
-//   info.isCrosspostingAllowed
-//   info.isEmojisEnabled
-//   info.isArchivePostsEnabled
-//   info.isDiscoveryAllowed
-//   info.isPostingRestricted
-//   info.isPredictionAllowed
-//   info.isPredictionsTournamentAllowed
-//   info.isPredictionContributorsAllowed
-//   info.isSpoilerAvailable
-//   info.isQuarantined
-//   info.wikiSettings.wikiEditMode → wiki mode (MODONLY / DISABLED / ANYONE)
-//   info.allAllowedPostTypes       → array of allowed post type strings
-//   info.allowedPostCapabilities   → array (e.g. ["AMA"])
-//   info.allowedMediaInComments    → array
-//   info.authorFlairSettings.isEnabled / isSelfAssignable
-//   info.postFlairSettings.isEnabled / isSelfAssignable
-//   info.detectedLanguage
-//   info.activeCount
+// What is NOT available:
+//   publicDescription, lang, welcomeMessage/submit_text,
+//   communityAchievements, CSS stylesheet, comment thread settings
 //
-//  NOT AVAILABLE (not in API response):
-//   welcomeMessage / submit_text   → not exposed
-//   communityAchievements          → not exposed
-//   commentThreads settings        → not exposed
-//   publicDescription              → not exposed (only description)
-//   lang                           → not exposed
-//   subscribers url                → not exposed
+async function captureSnapshot(subName: string): Promise<Record<string, unknown>> {
+  const info = await safeFetch(() => reddit.getSubredditInfoByName(subName), null) as any;
 
-async function captureNormalizedSnapshot(subName: string): Promise<Record<string, unknown>> {
-  // Fetch subredditInfo separately so we can use it before destructuring the rest
-  const subredditInfo = await safeFetch(() => reddit.getSubredditInfoByName(subName), null);
-
-  const [
-    rules,
-    postFlairs,
-    userFlairs,
-    subredditStyles,
-    devvitSettings,
-  ] = await Promise.all([
+  const [rules, postFlairs, userFlairs, subredditStyles, devvitSettings] = await Promise.all([
     safeFetch(() => reddit.getRules(subName), []),
     safeFetch(() => reddit.getPostFlairTemplates(subName), []),
     safeFetch(() => reddit.getUserFlairTemplates(subName), []),
     safeFetch(() => reddit.getSubredditStyles(context.subredditId), null),
-    readAllDevvitSettings(),
+    readDevvitSettings(),
   ]);
 
+  // AutoModerator — may 404 if not configured, requires wiki permission
   let automoderator = 'Not configured';
   try {
-    await ensureWikiReadAccess(subName);
+    await assertWikiAccess(subName);
     const wikiPages = await safeFetch(() => reddit.getWikiPages(subName), []);
-    const resolvedPage = resolveAutomodPageName(wikiPages) ?? DEFAULT_AUTOMOD_PAGE;
-    const wiki = await reddit.getWikiPage(subName, resolvedPage);
+    const page = resolveAutomodPage(wikiPages) ?? DEFAULT_AUTOMOD_PAGE;
+    const wiki = await reddit.getWikiPage(subName, page);
     automoderator = wiki.content;
-    console.log('[SubVault] Automod config captured:', automoderator.length, 'characters from', resolvedPage);
+    console.log(`[SubVault] AutoMod captured: ${automoderator.length} chars from "${page}"`);
   } catch (err) {
-    const errMsg = String(err);
-    if (errMsg.includes('wiki moderator permission')) throw err;
-    if (errMsg.includes('404') || errMsg.includes('Not Found')) {
-      console.log('[SubVault] Automod not configured (404)');
+    const msg = String(err);
+    if (msg.includes('wiki moderator permission')) throw err;
+    if (msg.includes('404') || msg.includes('Not Found')) {
+      console.log('[SubVault] AutoMod page not found (not configured)');
     } else {
-      console.warn('[SubVault] Warning: Failed to fetch automod config:', errMsg.slice(0, 150));
+      console.warn('[SubVault] AutoMod fetch warning:', msg.slice(0, 150));
     }
   }
 
-  const info = subredditInfo as any;
-
-  // description comes as { markdown: "..." } from the Devvit API
-  const extractedDescription = extractString(info?.description ?? '');
-
-  // publicDescription is NOT in the Devvit API response — mark clearly
-  const extractedPublicDescription = '';
-
-  // wikiSettings comes as { wikiEditMode: "MODONLY" | "DISABLED" | "ANYONE" }
+  const description = extractString(info?.description ?? '');
   const wikiEditMode = info?.wikiSettings?.wikiEditMode ?? 'DISABLED';
 
-  console.log('[SubVault] Captured identity fields:', {
-    name: info?.name,
-    title: info?.title,
-    description: extractedDescription,
-    isNsfw: info?.isNsfw,
-    type: info?.type,
+  const identity = info ? {
+    // Core identity
+    displayName: info.name ?? subName,
+    title: info.title ?? '',
+    description,
+    subredditType: info.type ?? '',
+    nsfw: info.isNsfw ?? false,
+    subscribersCount: info.subscribersCount ?? 0,
+    activeCount: info.activeCount ?? 0,
+    createdAt: info.createdAt ?? '',
+    id: info.id ?? '',
+    isQuarantined: info.isQuarantined ?? false,
+    detectedLanguage: info.detectedLanguage ?? null,
+    // Interaction controls
+    isPostingRestricted: info.isPostingRestricted ?? false,
+    isCommentingRestricted: info.isCommentingRestricted ?? false,
+    isCrosspostingAllowed: info.isCrosspostingAllowed ?? true,
+    isArchivePostsEnabled: info.isArchivePostsEnabled ?? false,
+    isDiscoveryAllowed: info.isDiscoveryAllowed ?? true,
+    isSpoilerAvailable: info.isSpoilerAvailable ?? false,
+    isChatPostCreationAllowed: info.isChatPostCreationAllowed ?? false,
+    isChatPostFeatureEnabled: info.isChatPostFeatureEnabled ?? false,
+    isEmojisEnabled: info.isEmojisEnabled ?? false,
+    isPredictionAllowed: info.isPredictionAllowed ?? false,
+    isPredictionsTournamentAllowed: info.isPredictionsTournamentAllowed ?? false,
+    isPredictionContributorsAllowed: info.isPredictionContributorsAllowed ?? false,
+    // Post types
+    allAllowedPostTypes: Array.isArray(info.allAllowedPostTypes) ? info.allAllowedPostTypes : [],
+    allowedPostCapabilities: Array.isArray(info.allowedPostCapabilities) ? info.allowedPostCapabilities : [],
+    allowedMediaInComments: Array.isArray(info.allowedMediaInComments) ? info.allowedMediaInComments : [],
+    // Flair settings
+    authorFlairEnabled: info.authorFlairSettings?.isEnabled ?? false,
+    authorFlairSelfAssignable: info.authorFlairSettings?.isSelfAssignable ?? false,
+    postFlairEnabled: info.postFlairSettings?.isEnabled ?? false,
+    postFlairSelfAssignable: info.postFlairSettings?.isSelfAssignable ?? false,
+    // Wiki
     wikiEditMode,
-    isPostingRestricted: info?.isPostingRestricted,
-    isCommentingRestricted: info?.isCommentingRestricted,
-    isCrosspostingAllowed: info?.isCrosspostingAllowed,
-    isArchivePostsEnabled: info?.isArchivePostsEnabled,
-    isDiscoveryAllowed: info?.isDiscoveryAllowed,
-    isSpoilerAvailable: info?.isSpoilerAvailable,
-    allAllowedPostTypes: info?.allAllowedPostTypes,
-  });
+    // Style fields (from subredditStyles or info)
+    communityIcon: info.communityIcon ?? '',
+    bannerBackgroundImage: info.bannerBackgroundImage ?? '',
+    bannerImg: info.bannerImg ?? '',
+    keyColor: info.keyColor ?? '',
+    primaryColor: info.primaryColor ?? '',
+    iconColor: info.iconColor ?? '',
+    // NOT available in Devvit API — explicitly null so diffs are stable
+    publicDescription: null,
+    welcomeMessage: null,
+    lang: null,
+  } : null;
 
-  const normalizedRules = Array.isArray(rules)
-    ? (rules as any[]).map((r: any, i: number) => ({
-        shortName: r.shortName ?? r.name ?? `Rule ${i + 1}`,
-        description: r.description ?? '',
-        violationReason: r.violationReason ?? r.shortName ?? r.name ?? '',
-        kind: r.kind ?? 'all',
-        priority: r.priority ?? i,
-      }))
-    : [];
-
-  const normalizedPostFlairs = Array.isArray(postFlairs)
-    ? (postFlairs as any[]).map((f: any) => ({
-        id: f.id ?? '',
-        text: f.text ?? '',
-        textColor: f.textColor ?? 'dark',
-        backgroundColor: f.backgroundColor ?? '',
-        textEditable: f.textEditable ?? false,
-        modOnly: f.modOnly ?? false,
-      }))
-    : [];
-
-  const normalizedUserFlairs = Array.isArray(userFlairs)
-    ? (userFlairs as any[]).map((f: any) => ({
-        id: f.id ?? '',
-        text: f.text ?? '',
-        textColor: f.textColor ?? 'dark',
-        backgroundColor: f.backgroundColor ?? '',
-        textEditable: f.textEditable ?? false,
-        modOnly: f.modOnly ?? false,
-      }))
-    : [];
-
-  const styleSettings = subredditStyles && typeof subredditStyles === 'object'
-    ? (subredditStyles as Record<string, unknown>)
+  const styles = subredditStyles && typeof subredditStyles === 'object'
+    ? subredditStyles as Record<string, unknown>
     : {};
 
   const communitySettings: Record<string, unknown> = {
-    ...styleSettings,
-    // Fields confirmed available in Devvit API
+    ...styles,
     title: info?.title ?? '',
-    description: extractedDescription,
+    description,
     subredditType: info?.type ?? '',
     nsfw: info?.isNsfw ?? false,
-    // Posting & interaction controls
     isPostingRestricted: info?.isPostingRestricted ?? false,
     isCommentingRestricted: info?.isCommentingRestricted ?? false,
     isCrosspostingAllowed: info?.isCrosspostingAllowed ?? true,
@@ -568,349 +390,277 @@ async function captureNormalizedSnapshot(subName: string): Promise<Record<string
     isPredictionAllowed: info?.isPredictionAllowed ?? false,
     isPredictionsTournamentAllowed: info?.isPredictionsTournamentAllowed ?? false,
     isPredictionContributorsAllowed: info?.isPredictionContributorsAllowed ?? false,
-    // Post types
     allAllowedPostTypes: Array.isArray(info?.allAllowedPostTypes) ? info.allAllowedPostTypes : [],
     allowedPostCapabilities: Array.isArray(info?.allowedPostCapabilities) ? info.allowedPostCapabilities : [],
     allowedMediaInComments: Array.isArray(info?.allowedMediaInComments) ? info.allowedMediaInComments : [],
-    // Flair settings
     authorFlairEnabled: info?.authorFlairSettings?.isEnabled ?? false,
     authorFlairSelfAssignable: info?.authorFlairSettings?.isSelfAssignable ?? false,
     postFlairEnabled: info?.postFlairSettings?.isEnabled ?? false,
     postFlairSelfAssignable: info?.postFlairSettings?.isSelfAssignable ?? false,
-    // Wiki
     wikiEditMode,
-    // Fields NOT available in Devvit API — explicitly noted
-    publicDescription: null,        // Not in API response
-    welcomeMessage: null,           // Not in API response (submit_text)
-    lang: null,                     // Not in API response
+    // NOT available — stable nulls
+    publicDescription: null,
+    welcomeMessage: null,
+    lang: null,
   };
 
-  console.log('[SubVault] Captured full settings:', JSON.stringify(communitySettings, null, 2));
-  console.log('[SubVault] Captured Devvit app settings:', JSON.stringify(devvitSettings, null, 2));
+  const normalizedRules = Array.isArray(rules)
+    ? (rules as any[]).map((r, i) => ({
+        shortName: r.shortName ?? r.name ?? `Rule ${i + 1}`,
+        description: r.description ?? '',
+        violationReason: r.violationReason ?? r.shortName ?? r.name ?? '',
+        kind: r.kind ?? 'all',
+        priority: typeof r.priority === 'number' ? r.priority : i,
+      }))
+    : [];
+
+  const normalizeFlairs = (arr: unknown[]) =>
+    arr.map((f: any) => ({
+      id: f.id ?? '',
+      text: f.text ?? '',
+      textColor: f.textColor ?? 'dark',
+      backgroundColor: f.backgroundColor ?? '',
+      textEditable: f.textEditable ?? false,
+      modOnly: f.modOnly ?? false,
+    }));
 
   return {
-    identity: info ? {
-      // Core identity — confirmed available
-      displayName: info.name ?? subName,
-      title: info.title ?? '',
-      description: extractedDescription,
-      subredditType: info.type ?? '',
-      nsfw: info.isNsfw ?? false,
-      subscribersCount: info.subscribersCount ?? 0,
-      activeCount: info.activeCount ?? 0,
-      createdAt: info.createdAt ?? '',
-      id: info.id ?? '',
-      isQuarantined: info.isQuarantined ?? false,
-      detectedLanguage: info.detectedLanguage ?? null,
-
-      // Interaction settings — confirmed available
-      isPostingRestricted: info.isPostingRestricted ?? false,
-      isCommentingRestricted: info.isCommentingRestricted ?? false,
-      isCrosspostingAllowed: info.isCrosspostingAllowed ?? true,
-      isArchivePostsEnabled: info.isArchivePostsEnabled ?? false,
-      isDiscoveryAllowed: info.isDiscoveryAllowed ?? true,
-      isSpoilerAvailable: info.isSpoilerAvailable ?? false,
-      isChatPostCreationAllowed: info.isChatPostCreationAllowed ?? false,
-      isChatPostFeatureEnabled: info.isChatPostFeatureEnabled ?? false,
-      isEmojisEnabled: info.isEmojisEnabled ?? false,
-      isPredictionAllowed: info.isPredictionAllowed ?? false,
-      isPredictionsTournamentAllowed: info.isPredictionsTournamentAllowed ?? false,
-      isPredictionContributorsAllowed: info.isPredictionContributorsAllowed ?? false,
-
-      // Post type settings — confirmed available
-      allAllowedPostTypes: Array.isArray(info.allAllowedPostTypes) ? info.allAllowedPostTypes : [],
-      allowedPostCapabilities: Array.isArray(info.allowedPostCapabilities) ? info.allowedPostCapabilities : [],
-      allowedMediaInComments: Array.isArray(info.allowedMediaInComments) ? info.allowedMediaInComments : [],
-
-      // Flair settings — confirmed available
-      authorFlairEnabled: info.authorFlairSettings?.isEnabled ?? false,
-      authorFlairSelfAssignable: info.authorFlairSettings?.isSelfAssignable ?? false,
-      postFlairEnabled: info.postFlairSettings?.isEnabled ?? false,
-      postFlairSelfAssignable: info.postFlairSettings?.isSelfAssignable ?? false,
-
-      // Wiki — confirmed available (wikiSettings.wikiEditMode)
-      wikiEditMode,
-
-      // Style fields from subredditStyles
-      communityIcon: (info as any).communityIcon ?? '',
-      bannerBackgroundImage: (info as any).bannerBackgroundImage ?? '',
-      bannerImg: (info as any).bannerImg ?? '',
-      keyColor: (info as any).keyColor ?? '',
-      primaryColor: (info as any).primaryColor ?? '',
-      iconColor: (info as any).iconColor ?? '',
-
-      // Fields confirmed NOT available in Devvit API
-      publicDescription: null,
-      welcomeMessage: null,
-      lang: null,
-    } : null,
+    identity,
     settings: communitySettings,
     rules: normalizedRules,
+    removalReasons: [],
     flairs: {
-      post: normalizedPostFlairs,
-      user: normalizedUserFlairs,
+      post: normalizeFlairs(Array.isArray(postFlairs) ? postFlairs : []),
+      user: normalizeFlairs(Array.isArray(userFlairs) ? userFlairs : []),
     },
+    widgets: null,
     automoderator,
     wikiPages: [],
-    removalReasons: [],
-    widgets: null,
-    userManagement: {
-      banned: [],
-      muted: [],
-      approved: [],
-      moderators: [],
-    },
+    userManagement: { banned: [], muted: [], approved: [], moderators: [] },
+    devvitSettings,
+    capturedAt: new Date().toISOString(),
     limitations: {
+      publicDescription: 'Not available — not in Devvit API response',
+      welcomeMessage: 'Not available — submit_text not in Devvit API response',
       cssStylesheet: 'Read-only — not exposed by Devvit API',
       emojis: 'Read-only — not exposed by Devvit API',
-      chatChannels: 'Read-only — not exposed by Devvit API',
-      modNotes: 'Read-only — not exposed by Devvit API',
-      safetyFilters: 'Read-only — not exposed by Devvit API',
-      banEventsHistory: 'Read-only — not exposed by Devvit API',
-      welcomeMessage: 'Not available — submit_text not in Devvit API response',
-      publicDescription: 'Not available — not in Devvit API response',
+      chatChannels: 'Not available — not exposed by Devvit API',
+      modNotes: 'Not available — not exposed by Devvit API',
+      safetyFilters: 'Not available — not exposed by Devvit API',
+      banEventsHistory: 'Not available — not exposed by Devvit API',
       communityAchievements: 'Not available — not in Devvit API response',
       lang: 'Not available — not in Devvit API response',
     },
-    devvitSettings,
-    capturedAt: new Date().toISOString(),
   };
 }
 
-// ─── Validate snapshot data completeness ──────────────────────────────────────
+// ─── Verification ─────────────────────────────────────────────────────────────
+
+/**
+ * Normalize snapshot data before diffing so that Devvit's wrapped objects
+ * (e.g. `{ markdown: "..." }` for description) don't cause false diffs.
+ */
+function normalizeForVerification(data: Record<string, unknown>): Record<string, unknown> {
+  try {
+    const copy = JSON.parse(JSON.stringify(data)) as Record<string, any>;
+    const id = copy['identity'];
+    if (id && typeof id === 'object') {
+      id.description = extractString(id.description);
+      id.publicDescription = extractString(id.publicDescription);
+      id.displayName = extractString(id.displayName);
+      id.lang = extractString(id.lang);
+    }
+    return copy;
+  } catch {
+    return data;
+  }
+}
+
+export function buildVerificationResult(
+  targetData: Record<string, unknown>,
+  liveData: Record<string, unknown>,
+): VerificationResult {
+  const target = normalizeForVerification(targetData);
+  const live = normalizeForVerification(liveData);
+
+  const diffs = computeSnapshotDiff(target, live);
+  const totalAdditions = diffs.reduce((sum, d) => sum + d.additions, 0);
+  const totalDeletions = diffs.reduce((sum, d) => sum + d.deletions, 0);
+
+  const restorableSections = new Set(['Identity', 'Rules', 'AutoModerator', 'Post Flairs', 'User Flairs']);
+
+  const sections: VerificationSection[] = diffs.map(d => ({
+    section: d.section,
+    additions: d.additions,
+    deletions: d.deletions,
+    status: restorableSections.has(d.section) ? 'drifted' : 'skipped',
+  }));
+
+  // Extra guard: explicitly check description fields since they are most likely to drift
+  const tId = target['identity'] as Record<string, any> | null | undefined;
+  const lId = live['identity'] as Record<string, any> | null | undefined;
+  if (tId && lId) {
+    const descMismatch = String(tId.description ?? '') !== String(lId.description ?? '');
+    const pubDescMismatch = String(tId.publicDescription ?? '') !== String(lId.publicDescription ?? '');
+    if (descMismatch || pubDescMismatch) {
+      const existing = sections.find(s => s.section === 'Identity');
+      if (existing) {
+        existing.status = 'drifted';
+      } else {
+        sections.push({ section: 'Identity', additions: 1, deletions: 1, status: 'drifted' });
+      }
+    }
+  }
+
+  const drifted = sections.filter(s => s.status === 'drifted');
+  const notes: string[] = drifted.length === 0
+    ? ['All restored sections match the live subreddit — restore verified successfully. ✓']
+    : drifted.map(s =>
+        `${s.section}: live state still differs from snapshot (+${s.additions} / -${s.deletions}). ` +
+        'Reddit may need a moment to propagate changes, or the Devvit API had a temporary error.'
+      );
+
+  return {
+    sectionsChanged: drifted.length,
+    totalAdditions,
+    totalDeletions,
+    sections,
+    verifiedAt: new Date().toISOString(),
+    verified: drifted.length === 0,
+    notes,
+  };
+}
+
+// ─── Validation ───────────────────────────────────────────────────────────────
 
 function isValidSnapshotData(data: unknown): boolean {
   if (!data || typeof data !== 'object') return false;
   const obj = data as Record<string, unknown>;
-
-  const requiredFields = ['identity', 'rules', 'flairs', 'automoderator', 'userManagement', 'capturedAt', 'limitations'];
-  for (const field of requiredFields) {
-    if (!(field in obj) || obj[field] === null || obj[field] === undefined) return false;
+  for (const field of ['identity', 'rules', 'flairs', 'automoderator', 'userManagement', 'capturedAt', 'limitations']) {
+    if (!(field in obj) || obj[field] == null) return false;
   }
-
-  if (!Array.isArray(obj.rules)) return false;
-  if (!Array.isArray(obj.removalReasons)) return false;
-  if (typeof obj.flairs !== 'object' || !obj.flairs) return false;
-
-  const flairs = obj.flairs as Record<string, unknown>;
-  if (!Array.isArray(flairs.post) || !Array.isArray(flairs.user)) return false;
-  if (typeof obj.userManagement !== 'object' || !obj.userManagement) return false;
-
+  if (!Array.isArray(obj['rules'])) return false;
+  if (!Array.isArray(obj['removalReasons'])) return false;
+  const flairs = obj['flairs'] as Record<string, unknown>;
+  if (!Array.isArray(flairs?.['post']) || !Array.isArray(flairs?.['user'])) return false;
+  if (typeof obj['userManagement'] !== 'object' || !obj['userManagement']) return false;
   return true;
 }
 
-// ─── GET /api/snapshot ────────────────────────────────────────────────────────
+// ─── GET /api/snapshot — List all snapshots ───────────────────────────────────
 
 snapshot.get('/', async (c) => {
   try {
-    const snapshotMap = await redis.hGetAll('snapshot_backups');
-    const snapshotsRaw = Object.values(snapshotMap);
-    if (snapshotsRaw.length === 0) return c.json([]);
+    const map = await redis.hGetAll('snapshot_backups');
+    if (Object.keys(map).length === 0) return c.json([]);
 
-    const snapshots: SnapshotListItem[] = [];
-    for (const raw of snapshotsRaw) {
-      try {
-        const parsed = parseStoredSnapshot(raw);
-        if (parsed) snapshots.push(toListItem(parsed));
-      } catch (err) {
-        console.error('[SubVault] Failed to parse snapshot:', err);
-      }
+    const items: SnapshotListItem[] = [];
+    for (const raw of Object.values(map)) {
+      const parsed = parseStoredSnapshot(raw);
+      if (parsed) items.push(toListItem(parsed));
     }
-    snapshots.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
-    return c.json(snapshots);
+    items.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+    return c.json(items);
   } catch (err) {
-    console.error('[SubVault] Failed to fetch snapshots:', err);
+    console.error('[SubVault] GET /snapshot failed:', err);
     return c.json({ error: 'Failed to fetch snapshots' }, 500);
   }
 });
 
-// ─── POST /api/snapshot ───────────────────────────────────────────────────────
+// ─── POST /api/snapshot — Create a manual snapshot ───────────────────────────
 
 snapshot.post('/', async (c) => {
   try {
     const body = await c.req.json<{ message?: string; description?: string }>();
-    let message =
-      typeof body.message === 'string' && body.message.trim()
-        ? body.message.trim()
-        : 'Manual snapshot';
-
     const subName = context.subredditName;
     if (!subName) return c.json({ error: 'Missing subreddit context' }, 400);
 
     const creator = await safeFetch(() => reddit.getCurrentUsername(), 'UnknownMod');
-    message = `${message} — by ${creator}`;
+    const baseMessage = body.message?.trim() || 'Manual snapshot';
+    const message = `${baseMessage} — by ${creator}`;
 
-    const data = await captureNormalizedSnapshot(subName);
-
+    const data = await captureSnapshot(subName);
     const timestamp = Date.now();
     const id = `manual_${timestamp}`;
-    const stored = { id, message, data, createdAt: new Date(timestamp).toISOString() };
-    const payload = JSON.stringify(stored);
-
-    await Promise.all([
-      redis.set(`snapshot:${id}`, payload),
-      redis.hSet('snapshot_backups', { [id]: payload }),
-    ]);
-
-    console.log('[SubVault] Manual snapshot saved:', id);
-
-    let author = 'Manual Commit';
-    const match = message.match(/— by (.+)$/);
-    if (match?.[1]) author = match[1];
-
-    return c.json({
+    const snap: StoredSnapshot = {
       id,
-      author,
-      hash: String(timestamp).slice(-7),
       message,
-      timestamp: stored.createdAt,
-      changes: Object.keys(data).length,
-      status: 'success',
-    }, 201);
+      data,
+      createdAt: new Date(timestamp).toISOString(),
+    };
+
+    await saveSnapshot(snap);
+    console.log('[SubVault] Manual snapshot saved:', id);
+    return c.json(toListItem(snap), 201);
   } catch (err) {
-    console.error('[SubVault] Failed to save snapshot:', err);
+    console.error('[SubVault] POST /snapshot failed:', err);
     return c.json({ error: 'Failed to save snapshot' }, 500);
   }
 });
 
-// ─── GET /api/snapshot/:id ────────────────────────────────────────────────────
+// ─── GET /api/snapshot/:id — Get snapshot detail ─────────────────────────────
 
 snapshot.get('/:id', async (c) => {
   const id = c.req.param('id');
   try {
-    let raw = await redis.get(`snapshot:${id}`);
-    if (!raw) {
-      const snapshotMap = await redis.hGetAll('snapshot_backups');
-      raw = snapshotMap[id];
-    }
-    if (!raw) return c.json({ error: 'Snapshot not found' }, 404);
-
-    const parsed = parseStoredSnapshot(raw);
-    if (!parsed) return c.json({ error: 'Failed to parse snapshot' }, 500);
-
-    if (!parsed.data || !isValidSnapshotData(parsed.data)) {
-      console.warn(`[SubVault] Snapshot ${id} has incomplete data:`, {
-        dataExists: !!parsed.data,
-        valid: isValidSnapshotData(parsed.data),
-      });
+    const snap = await loadSnapshot(id);
+    if (!snap) return c.json({ error: 'Snapshot not found' }, 404);
+    if (!isValidSnapshotData(snap.data)) {
       return c.json({ error: 'Snapshot data is incomplete or corrupted' }, 400);
     }
-
-    const identity = parsed.data?.identity as Record<string, unknown> | undefined;
-    if (identity) {
-      console.log('[SubVault] Snapshot details retrieved:', {
-        snapshotId: id,
-        description: extractString(identity.description),
-        title: extractString(identity.title),
-        displayName: extractString(identity.displayName),
-        wikiEditMode: identity.wikiEditMode,
-        isPostingRestricted: identity.isPostingRestricted,
-        isCommentingRestricted: identity.isCommentingRestricted,
-      });
-    }
-
-    const settingsBlock = parsed.data?.settings as Record<string, unknown> | undefined;
-    if (settingsBlock) {
-      console.log('[SubVault] Snapshot full settings retrieved:', JSON.stringify(settingsBlock, null, 2));
-    }
-
-    const devvitSettingsBlock = parsed.data?.devvitSettings as Record<string, unknown> | undefined;
-    if (devvitSettingsBlock && Object.keys(devvitSettingsBlock).length > 0) {
-      console.log('[SubVault] Snapshot Devvit app settings retrieved:', JSON.stringify(devvitSettingsBlock, null, 2));
-    }
-
-    return c.json({ ...toListItem(parsed), data: parsed.data });
+    return c.json({ ...toListItem(snap), data: snap.data });
   } catch (err) {
-    console.error('[SubVault] Failed to fetch snapshot details:', err);
+    console.error('[SubVault] GET /snapshot/:id failed:', err);
     return c.json({ error: 'Failed to fetch snapshot details' }, 500);
   }
 });
 
-// ─── GET /api/snapshot/:id/diff ───────────────────────────────────────────────
+// ─── GET /api/snapshot/:id/diff — Compute diff vs previous ───────────────────
 
 snapshot.get('/:id/diff', async (c) => {
   const id = c.req.param('id');
   try {
-    let currentRaw = await redis.get(`snapshot:${id}`);
-    if (!currentRaw) {
-      const snapshotMap = await redis.hGetAll('snapshot_backups');
-      currentRaw = snapshotMap[id];
-    }
-    if (!currentRaw) return c.json({ error: 'Snapshot not found' }, 404);
+    const current = await loadSnapshot(id);
+    if (!current) return c.json({ error: 'Snapshot not found' }, 404);
 
-    const currentParsed = parseStoredSnapshot(currentRaw);
-    if (!currentParsed) return c.json({ error: 'Failed to parse snapshot' }, 500);
-
-    const allSnapshots = await getAllSnapshotsSorted();
-    const currentIndex = allSnapshots.findIndex(s => s.id === id);
-    const previousParsed =
-      currentIndex >= 0 && currentIndex < allSnapshots.length - 1
-        ? allSnapshots[currentIndex + 1]
-        : null;
+    const all = await getAllSnapshotsSorted();
+    const idx = all.findIndex(s => s.id === id);
+    const previous = idx >= 0 && idx < all.length - 1 ? all[idx + 1] : null;
 
     return c.json({
       current: {
-        id: currentParsed.id ?? id,
-        message: currentParsed.message ?? '',
-        createdAt: currentParsed.createdAt ?? new Date().toISOString(),
-        data: currentParsed.data ?? {},
+        id: current.id,
+        message: current.message,
+        createdAt: current.createdAt,
+        data: current.data,
       },
-      previous: previousParsed
-        ? {
-            id: previousParsed.id ?? '',
-            message: previousParsed.message ?? '',
-            createdAt: previousParsed.createdAt ?? '',
-            data: previousParsed.data ?? {},
-          }
-        : null,
+      previous: previous ? {
+        id: previous.id,
+        message: previous.message,
+        createdAt: previous.createdAt,
+        data: previous.data,
+      } : null,
     });
   } catch (err) {
-    console.error('[SubVault] Failed to compute diff:', err);
+    console.error('[SubVault] GET /snapshot/:id/diff failed:', err);
     return c.json({ error: 'Failed to compute diff' }, 500);
   }
 });
 
-// ─── GET /api/snapshot/polling-sessions ───────────────────────────────────────
-
-snapshot.get('/polling-sessions', async (c) => {
-  try {
-    const keys: string[] = typeof (redis as any).keys === 'function'
-      ? await (redis as any).keys('polling:*')
-      : [];
-
-    const sessions: PollingSession[] = [];
-    for (const key of keys) {
-      try {
-        const raw = await redis.get(key);
-        if (!raw) continue;
-        const parsed = JSON.parse(raw) as PollingSession;
-        sessions.push(parsed);
-      } catch (err) {
-        console.warn('[SubVault] Failed to parse polling session:', String(err).slice(0, 120));
-      }
-    }
-
-    sessions.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-    return c.json({ sessions });
-  } catch (err) {
-    console.error('[SubVault] Failed to list polling sessions:', err);
-    return c.json({ error: 'Failed to list polling sessions' }, 500);
-  }
-});
-
-// ─── GET /api/snapshot/:pollingId/verify-status ──────────────────────────────
+// ─── GET /api/snapshot/:pollingId/verify-status — Poll verification ───────────
 
 snapshot.get('/:pollingId/verify-status', async (c) => {
   const pollingId = c.req.param('pollingId');
-
   try {
     const session = await readPollingSession(pollingId);
     if (!session) return c.json({ error: 'Polling session not found' }, 404);
 
+    // Already done
     if (session.verified || session.timedOut || !session.isActive) {
       return c.json(session);
     }
 
+    // Timed out
     if (session.currentAttempt >= session.maxAttempts) {
       session.isActive = false;
       session.timedOut = true;
@@ -919,25 +669,21 @@ snapshot.get('/:pollingId/verify-status', async (c) => {
       return c.json(session);
     }
 
-    const now = Date.now();
+    // Too soon to poll again
     if (session.lastAttemptAt) {
-      const elapsed = now - new Date(session.lastAttemptAt).getTime();
-      if (Number.isFinite(elapsed) && elapsed < VERIFICATION_POLL_INTERVAL_MS) {
+      const elapsed = Date.now() - new Date(session.lastAttemptAt).getTime();
+      if (elapsed < VERIFICATION_POLL_INTERVAL_MS) {
         return c.json({ ...session, nextPollAfterMs: VERIFICATION_POLL_INTERVAL_MS - elapsed });
       }
     }
 
-    const targetSnapshot = await loadStoredSnapshot(session.targetId);
-    if (!targetSnapshot?.data) {
+    const target = await loadSnapshot(session.targetId);
+    if (!target?.data) {
       session.isActive = false;
       session.completedAt = new Date().toISOString();
       session.lastVerification = {
-        sectionsChanged: 0,
-        totalAdditions: 0,
-        totalDeletions: 0,
-        sections: [],
-        verifiedAt: new Date().toISOString(),
-        verified: false,
+        sectionsChanged: 0, totalAdditions: 0, totalDeletions: 0,
+        sections: [], verifiedAt: new Date().toISOString(), verified: false,
         notes: ['Target snapshot could not be loaded for verification.'],
       };
       await writePollingSession(session);
@@ -947,271 +693,185 @@ snapshot.get('/:pollingId/verify-status', async (c) => {
     session.currentAttempt += 1;
     session.lastAttemptAt = new Date().toISOString();
 
-    await redis.expire(`restore_in_progress:${session.subName}`, 60);
-
-    const liveData = await captureNormalizedSnapshot(session.subName);
-    const verification = buildVerificationResult(targetSnapshot.data, liveData);
+    const liveData = await captureSnapshot(session.subName);
+    const verification = buildVerificationResult(target.data, liveData);
     session.lastVerification = verification;
 
-    if (verification.verified) {
+    if (verification.verified || session.currentAttempt >= session.maxAttempts) {
       session.isActive = false;
-      session.verified = true;
+      session.verified = verification.verified;
+      session.timedOut = !verification.verified;
       session.completedAt = new Date().toISOString();
-      await saveVerificationSnapshot(
-        `verify_${pollingId}`,
-        'Verification capture after restore — by SubVault',
-        liveData,
-      );
-      await writePollingSession(session);
-      return c.json(session);
-    }
 
-    if (session.currentAttempt >= session.maxAttempts) {
-      session.isActive = false;
-      session.timedOut = true;
-      session.completedAt = new Date().toISOString();
-      await saveVerificationSnapshot(
-        `verify_${pollingId}`,
-        'Verification capture after restore — by SubVault',
-        liveData,
-      );
-      await writePollingSession(session);
-      return c.json(session, 408);
+      // Save a verification snapshot
+      const vSnap: StoredSnapshot = {
+        id: `verify_${pollingId}`,
+        message: 'Verification capture after restore — by SubVault',
+        data: liveData,
+        createdAt: new Date().toISOString(),
+      };
+      await saveSnapshot(vSnap);
     }
 
     await writePollingSession(session);
-    return c.json(session);
+    return c.json(session, session.timedOut ? 408 : 200);
   } catch (err) {
-    console.error('[SubVault] Failed to fetch verification status:', err);
+    console.error('[SubVault] GET /verify-status failed:', err);
     return c.json({ error: 'Failed to fetch verification status' }, 500);
   }
 });
 
-// ─── POST /api/snapshot/:id/restore ──────────────────────────────────────────
+// ─── POST /api/snapshot/:id/restore — Restore a snapshot ─────────────────────
 
 snapshot.post('/:id/restore', async (c) => {
   try {
     const body = await c.req.json<{ targetId?: string }>();
-    const targetId = body.targetId;
+    const { targetId } = body;
     if (!targetId) return c.json({ error: 'targetId is required' }, 400);
-
-    let targetRaw = await redis.get(`snapshot:${targetId}`);
-    if (!targetRaw) {
-      const snapshotMap = await redis.hGetAll('snapshot_backups');
-      targetRaw = snapshotMap[targetId];
-    }
-    if (!targetRaw) return c.json({ error: 'Target snapshot not found' }, 404);
-
-    const targetParsed = parseStoredSnapshot(targetRaw);
-    if (!targetParsed?.data) return c.json({ error: 'Failed to parse target snapshot' }, 500);
 
     const subName = context.subredditName;
     if (!subName) return c.json({ error: 'Missing subreddit context' }, 400);
 
-    const d = targetParsed.data;
-    const restoreResults: Record<string, { success: boolean; skipped?: boolean; count?: number; error?: string }> = {};
+    const target = await loadSnapshot(targetId);
+    if (!target?.data) return c.json({ error: 'Target snapshot not found or invalid' }, 404);
 
-    const attempt = async (name: string, fn: () => Promise<void>) => {
+    const d = target.data;
+    const results: Record<string, { success: boolean; count?: number; skipped?: boolean; error?: string }> = {};
+
+    async function attempt(name: string, fn: () => Promise<void>): Promise<void> {
       try {
         await fn();
         console.log(`[SubVault] ✓ ${name} restored`);
+        results[name] = { success: true };
       } catch (err) {
-        restoreResults[name] = { success: false, error: String(err).slice(0, 200) };
         console.error(`[SubVault] ✗ ${name} failed:`, err);
+        results[name] = { success: false, error: String(err).slice(0, 200) };
       }
-    };
+    }
 
-    const readRules = (): Array<Record<string, unknown>> => {
+    const getRules = (): Array<Record<string, unknown>> => {
       const raw = d['rules'];
-      if (!Array.isArray(raw)) return [];
-      return (raw as any[]).map((r: any, i: number) => ({
-        shortName: r.shortName ?? r.name ?? `Rule ${i + 1}`,
-        description: r.description ?? '',
-        violationReason: r.violationReason ?? r.shortName ?? r.name ?? '',
-        kind: r.kind ?? 'all',
-        priority: typeof r.priority === 'number' ? r.priority : i,
-      }));
+      return Array.isArray(raw) ? raw as Array<Record<string, unknown>> : [];
     };
 
-    const readFlairs = (kind: 'post' | 'user'): Array<Record<string, unknown>> => {
-      const block = d['flairs'] as Record<string, unknown> | undefined;
-      const arr = block?.[kind];
+    const getFlairs = (kind: 'post' | 'user'): Array<Record<string, unknown>> => {
+      const flairs = d['flairs'] as Record<string, unknown> | undefined;
+      const arr = flairs?.[kind];
       return Array.isArray(arr) ? arr as Array<Record<string, unknown>> : [];
     };
 
-    // ── 1. Rules ──────────────────────────────────────────────────────────────
+    // 1. Rules — add missing ones (Devvit can't delete rules)
     await attempt('rules', async () => {
-      const snapshotRules = readRules();
+      const snapshotRules = getRules();
+      if (snapshotRules.length === 0) { results['rules'] = { success: true, skipped: true }; return; }
 
-      if (snapshotRules.length === 0) {
-        restoreResults['rules'] = { success: true, skipped: true };
-        return;
-      }
-
-      const currentRules = await reddit.getRules(subName);
-      const currentRuleNames = new Set(
-        currentRules.map((r: any) => (r.shortName ?? '').toLowerCase()),
-      );
-
+      const current = await reddit.getRules(subName);
+      const existingNames = new Set(current.map((r: any) => (r.shortName ?? '').toLowerCase()));
       const sorted = [...snapshotRules].sort((a, b) => (a['priority'] as number) - (b['priority'] as number));
 
-      let addedCount = 0;
+      let added = 0;
       for (const rule of sorted) {
-        const shortName = (rule['shortName'] as string) || 'Rule';
-        if (!currentRuleNames.has(shortName.toLowerCase())) {
+        const name = (rule['shortName'] as string) || 'Rule';
+        if (!existingNames.has(name.toLowerCase())) {
           await reddit.createRule(subName, {
-            shortName,
+            shortName: name,
             description: (rule['description'] as string) ?? '',
-            violationReason: (rule['violationReason'] as string) || shortName,
+            violationReason: (rule['violationReason'] as string) || name,
             kind: (rule['kind'] as 'link' | 'comment' | 'all') ?? 'all',
           });
-          addedCount++;
+          added++;
         }
       }
-
-      restoreResults['rules'] = {
-        success: true,
-        count: addedCount,
-        error:
-          addedCount < snapshotRules.length
-            ? 'Devvit cannot delete old rules. Missing rules were added, but removed rules must be deleted manually.'
-            : undefined,
-      };
+      results['rules'] = { success: true, count: added };
+      if (added < snapshotRules.length) {
+        results['rules']!.error = 'Some rules already exist and were skipped. Devvit cannot delete rules — remove stale ones manually.';
+      }
     });
 
-    // ── 2. AutoModerator ──────────────────────────────────────────────────────
+    // 2. AutoModerator
     await attempt('automoderator', async () => {
-      const rawConfig = d['automoderator'];
+      const config = d['automoderator'];
+      const wikiPages = await safeFetch(() => reddit.getWikiPages(subName), []);
+      const page = resolveAutomodPage(wikiPages) ?? DEFAULT_AUTOMOD_PAGE;
 
-      console.log('[SubVault] Restoring automoderator — snapshot value present:',
-        typeof rawConfig === 'string' ? `${rawConfig.length} chars` : String(rawConfig));
-
-      const currentWikiPages = await safeFetch(() => reddit.getWikiPages(subName), []);
-      const resolvedPage =
-        resolveAutomodPageName(currentWikiPages) ??
-        resolveAutomodPageName(d['wikiPages']) ??
-        DEFAULT_AUTOMOD_PAGE;
-      console.log('[SubVault] Resolved automod wiki page for restore:', resolvedPage);
-
-      if (rawConfig === 'Not configured' || typeof rawConfig !== 'string' || rawConfig.trim() === '') {
-        if (rawConfig === 'Not configured') {
-          console.log('[SubVault] Snapshot indicates no automod — blanking current automod page');
-          try {
-            if (typeof (reddit as any).deleteWikiPage === 'function') {
-              await (reddit as any).deleteWikiPage({ subredditName: subName, page: resolvedPage });
-              console.log('[SubVault] deleteWikiPage succeeded');
-            } else {
-              await reddit.updateWikiPage({
-                subredditName: subName,
-                page: resolvedPage,
-                content: '',
-                reason: 'SubVault: removed AutoModerator via restore (snapshot indicated none)',
-              });
-              console.log('[SubVault] updateWikiPage (blank) succeeded');
-            }
-          } catch (err) {
-            console.warn('[SubVault] Error blanking automod during restore:', String(err).slice(0, 200));
-          }
-          restoreResults['automoderator'] = { success: true };
-          return;
+      if (config === 'Not configured' || typeof config !== 'string' || !config.trim()) {
+        if (config === 'Not configured') {
+          console.log('[SubVault] Blanking automod page (snapshot had none)');
+          await reddit.updateWikiPage({
+            subredditName: subName, page, content: '',
+            reason: 'SubVault: removed AutoModerator (snapshot indicated none)',
+          });
+        } else {
+          results['automoderator'] = { success: true, skipped: true };
         }
-        console.log('[SubVault] Skipping automoderator restore (no data in snapshot)');
-        restoreResults['automoderator'] = { success: true, skipped: true };
         return;
       }
 
-      await ensureWikiReadAccess(subName);
+      await assertWikiAccess(subName);
       await reddit.updateWikiPage({
-        subredditName: subName,
-        page: resolvedPage,
-        content: rawConfig,
+        subredditName: subName, page, content: config,
         reason: 'SubVault: restored from snapshot',
       });
-      restoreResults['automoderator'] = { success: true };
     });
 
-    // ── 3. Post flair templates ───────────────────────────────────────────────
+    // 3. Post flairs — delete all, recreate from snapshot
     await attempt('postFlairs', async () => {
-      const snapshotFlairs = readFlairs('post');
-
-      const currentFlairs = await reddit.getPostFlairTemplates(subName);
-      for (const flair of currentFlairs) {
-        await reddit.deleteFlairTemplate(subName, flair.id);
-      }
-
-      if (snapshotFlairs.length === 0) {
-        restoreResults['postFlairs'] = { success: true, skipped: true };
-        return;
-      }
-
-      for (const flair of snapshotFlairs) {
+      const snapshotFlairs = getFlairs('post');
+      const current = await reddit.getPostFlairTemplates(subName);
+      for (const f of current) await reddit.deleteFlairTemplate(subName, f.id);
+      if (snapshotFlairs.length === 0) { results['postFlairs'] = { success: true, skipped: true }; return; }
+      for (const f of snapshotFlairs) {
         await reddit.createPostFlairTemplate({
           subredditName: subName,
-          text: (flair['text'] as string) ?? '',
-          textColor: (flair['textColor'] as 'light' | 'dark') ?? 'dark',
-          backgroundColor: (flair['backgroundColor'] as string) ?? '',
-          modOnly: (flair['modOnly'] as boolean) ?? false,
+          text: (f['text'] as string) ?? '',
+          textColor: (f['textColor'] as 'light' | 'dark') ?? 'dark',
+          backgroundColor: (f['backgroundColor'] as string) ?? '',
+          modOnly: (f['modOnly'] as boolean) ?? false,
         });
       }
-      restoreResults['postFlairs'] = { success: true, count: snapshotFlairs.length };
+      results['postFlairs'] = { success: true, count: snapshotFlairs.length };
     });
 
-    // ── 4. User flair templates ───────────────────────────────────────────────
+    // 4. User flairs — delete all, recreate from snapshot
     await attempt('userFlairs', async () => {
-      const snapshotFlairs = readFlairs('user');
-
-      const currentFlairs = await reddit.getUserFlairTemplates(subName);
-      for (const flair of currentFlairs) {
-        await reddit.deleteFlairTemplate(subName, flair.id);
-      }
-
-      if (snapshotFlairs.length === 0) {
-        restoreResults['userFlairs'] = { success: true, skipped: true };
-        return;
-      }
-
-      for (const flair of snapshotFlairs) {
+      const snapshotFlairs = getFlairs('user');
+      const current = await reddit.getUserFlairTemplates(subName);
+      for (const f of current) await reddit.deleteFlairTemplate(subName, f.id);
+      if (snapshotFlairs.length === 0) { results['userFlairs'] = { success: true, skipped: true }; return; }
+      for (const f of snapshotFlairs) {
         await reddit.createUserFlairTemplate({
           subredditName: subName,
-          text: (flair['text'] as string) ?? '',
-          textColor: (flair['textColor'] as 'light' | 'dark') ?? 'dark',
-          backgroundColor: (flair['backgroundColor'] as string) ?? '',
-          modOnly: (flair['modOnly'] as boolean) ?? false,
+          text: (f['text'] as string) ?? '',
+          textColor: (f['textColor'] as 'light' | 'dark') ?? 'dark',
+          backgroundColor: (f['backgroundColor'] as string) ?? '',
+          modOnly: (f['modOnly'] as boolean) ?? false,
         });
       }
-      restoreResults['userFlairs'] = { success: true, count: snapshotFlairs.length };
+      results['userFlairs'] = { success: true, count: snapshotFlairs.length };
     });
 
-    // ── 5. User management — intentionally skipped ────────────────────────────
-    restoreResults['userManagement'] = { success: true, skipped: true };
+    // 5. User management — intentionally skipped (too destructive to automate)
+    results['userManagement'] = { success: true, skipped: true };
 
-    // ── 6. Audit snapshot ─────────────────────────────────────────────────────
+    // 6. Save restore audit snapshot
     const timestamp = Date.now();
-    const newId = `restore_${timestamp}`;
-    const auditPayload = JSON.stringify({
-      id: newId,
-      message: `Restored from: ${targetParsed.message ?? targetId}`,
-      data: targetParsed.data,
+    const auditSnap: StoredSnapshot = {
+      id: `restore_${timestamp}`,
+      message: `Restored from: ${target.message ?? targetId}`,
+      data: target.data,
       createdAt: new Date(timestamp).toISOString(),
-    });
-    await Promise.all([
-      redis.set(`snapshot:${newId}`, auditPayload),
-      redis.hSet('snapshot_backups', { [newId]: auditPayload }),
-    ]);
+    };
+    await saveSnapshot(auditSnap);
 
-    console.log(`[SubVault] Restore complete. Audit snapshot: ${newId}`);
-    console.log('[SubVault] Restore results:', JSON.stringify(restoreResults, null, 2));
-
-    const anyFailed = Object.values(restoreResults).some(r => !r.success);
-
+    // 7. Set restore-in-progress flag so auto-triggers don't create noise snapshots
     await redis.set(`restore_in_progress:${subName}`, 'true');
     await redis.expire(`restore_in_progress:${subName}`, 60);
-    console.log(`[SubVault] Set restore_in_progress flag for r/${subName} (60s TTL)`);
 
+    // 8. Create polling session for background verification
     const pollingId = `poll_${timestamp}`;
     const pollingSession: PollingSession = {
       pollingId,
-      restoreId: newId,
+      restoreId: auditSnap.id,
       targetId,
       subName,
       currentAttempt: 0,
@@ -1221,21 +881,23 @@ snapshot.post('/:id/restore', async (c) => {
       timedOut: false,
       createdAt: new Date().toISOString(),
     };
-
     await writePollingSession(pollingSession);
+
+    const anyFailed = Object.values(results).some(r => !r.success);
+    console.log('[SubVault] Restore complete. Results:', JSON.stringify(results, null, 2));
 
     return c.json({
       success: true,
       partialFailure: anyFailed,
-      newId,
+      newId: auditSnap.id,
       pollingId,
-      restoreResults,
+      restoreResults: results,
       message: anyFailed
-        ? 'Restore completed with some failures — verify status will continue to poll the live state.'
+        ? 'Restore completed with some failures — check restoreResults for details.'
         : 'Restore applied successfully. Verifying snapshot match in the background.',
     });
   } catch (err) {
-    console.error('[SubVault] Failed to restore snapshot:', err);
+    console.error('[SubVault] POST /restore failed:', err);
     return c.json({ error: 'Failed to restore snapshot' }, 500);
   }
 });
