@@ -8,6 +8,7 @@ import { SnapshotTable } from '../components/snapshot-table';
 import { CreateSnapshotModal } from '../components/create-snapshot-modal';
 import { DiffViewerDrawer } from '../components/diff-viewer-drawer';
 import { CommitSnapshot, SnapshotDetail } from '../lib/types';
+import { SnapshotDetailModal } from '../components/snapshot-detail-modal';
 
 export default function Dashboard() {
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
@@ -161,11 +162,11 @@ export default function Dashboard() {
         onClose={() => setIsDiffDrawerOpen(false)}
         snapshot={selectedSnapshot}
       />
-      {/* <SnapshotDetailModal
+      <SnapshotDetailModal
         isOpen={isDetailModalOpen}
         onClose={() => setIsDetailModalOpen(false)}
         snapshot={selectedDetail}
-      /> */}
+      />
     </DashboardLayout>
   );
 }

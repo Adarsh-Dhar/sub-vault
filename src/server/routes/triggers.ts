@@ -364,6 +364,14 @@ triggers.post('/on-mod-action', async (c) => {
     return c.json<TriggerResponse>({}, 200);
   }
 
+  // Skip auto-snapshot if a restore is currently propagating changes to Reddit
+  const subredditName = context.subredditName;
+  const restoreInProgress = await safeFetch(() => redis.get(`restore_in_progress:${subredditName}`), null);
+  if (restoreInProgress === 'true') {
+    console.log(`[SubVault] Skipping auto-snapshot — restore in progress for r/${subredditName}`);
+    return c.json<TriggerResponse>({}, 200);
+  }
+
   const timestamp = Date.now();
   const id = `auto_${timestamp}`;
   const label = ACTION_LABELS[action] ?? action;

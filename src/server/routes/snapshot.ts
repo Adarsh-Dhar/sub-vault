@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { Hono } from 'hono';
 import { context, redis, reddit } from '@devvit/web/server';
+import { computeSnapshotDiff } from '../../shared/snapshot-diff';
 
 export const snapshot = new Hono();
 
@@ -20,6 +21,43 @@ type StoredSnapshot = {
   data?: Record<string, unknown>;
   createdAt?: string;
 };
+
+type VerificationSection = {
+  section: string;
+  additions: number;
+  deletions: number;
+  status: 'matched' | 'drifted' | 'skipped';
+};
+
+type VerificationResult = {
+  sectionsChanged: number;
+  totalAdditions: number;
+  totalDeletions: number;
+  sections: VerificationSection[];
+  verifiedAt: string;
+  verified: boolean;
+  notes: string[];
+};
+
+type PollingSession = {
+  pollingId: string;
+  restoreId: string;
+  targetId: string;
+  subName: string;
+  currentAttempt: number;
+  maxAttempts: number;
+  isActive: boolean;
+  verified: boolean;
+  timedOut: boolean;
+  lastAttemptAt?: string;
+  lastVerification?: VerificationResult | null;
+  createdAt: string;
+  completedAt?: string;
+};
+
+const VERIFICATION_POLL_INTERVAL_MS = 10_000;
+const VERIFICATION_MAX_ATTEMPTS = 18;
+const POLLING_SESSION_TTL_SECONDS = 60 * 30;
 
 function parseStoredSnapshot(raw: string): StoredSnapshot | null {
   let parsed: unknown;
@@ -56,7 +94,6 @@ function toListItem(parsed: StoredSnapshot): SnapshotListItem {
   if (message.startsWith('Restored from:')) {
     author = 'Restore';
   } else {
-    // Try to extract author from "— by username" format (used for all manual/auto snapshots)
     const match = message.match(/— by (.+)$/);
     if (match?.[1]) {
       author = match[1];
@@ -98,6 +135,114 @@ async function safeFetch<T>(fn: () => Promise<T>, fallback: T): Promise<T> {
   }
 }
 
+async function loadStoredSnapshot(snapshotId: string): Promise<StoredSnapshot | null> {
+  let raw = await redis.get(`snapshot:${snapshotId}`);
+  if (!raw) {
+    const snapshotMap = await redis.hGetAll('snapshot_backups');
+    raw = snapshotMap[snapshotId];
+  }
+  if (!raw) return null;
+
+  return parseStoredSnapshot(raw);
+}
+
+function buildVerificationResult(
+  targetData: Record<string, unknown>,
+  liveData: Record<string, unknown>,
+): VerificationResult {
+  const diffs = computeSnapshotDiff(targetData, liveData);
+  const totalAdditions = diffs.reduce((sum, diff) => sum + diff.additions, 0);
+  const totalDeletions = diffs.reduce((sum, diff) => sum + diff.deletions, 0);
+
+  // Only restorable sections; others are not captured or applied
+  const restorableSections = new Set(['rules', 'flairs', 'automoderator']);
+
+  const sections: VerificationSection[] = diffs.map(diff => ({
+    section: diff.section,
+    additions: diff.additions,
+    deletions: diff.deletions,
+    status: restorableSections.has(diff.section) ? 'drifted' : 'skipped',
+  }));
+
+  const realDrift = sections.filter(section => section.status === 'drifted');
+  const notes: string[] = [];
+
+  if (realDrift.length === 0) {
+    notes.push('All restored sections match the live subreddit — restore verified successfully. ✓');
+  } else {
+    for (const section of sections) {
+      if (section.status === 'drifted') {
+        notes.push(
+          `${section.section}: live state still differs from snapshot (+${section.additions} / -${section.deletions}). ` +
+          'Reddit may need a moment to propagate changes, or the Devvit API had a temporary error.',
+        );
+      }
+    }
+  }
+
+  return {
+    sectionsChanged: realDrift.length,
+    totalAdditions,
+    totalDeletions,
+    sections,
+    verifiedAt: new Date().toISOString(),
+    verified: realDrift.length === 0,
+    notes,
+  };
+}
+
+async function saveVerificationSnapshot(
+  snapshotId: string,
+  message: string,
+  data: Record<string, unknown>,
+): Promise<void> {
+  const payload = JSON.stringify({
+    id: snapshotId,
+    message,
+    data,
+    createdAt: new Date().toISOString(),
+  });
+
+  await Promise.all([
+    redis.set(`snapshot:${snapshotId}`, payload),
+    redis.hSet('snapshot_backups', { [snapshotId]: payload }),
+  ]);
+}
+
+async function readPollingSession(pollingId: string): Promise<PollingSession | null> {
+  const raw = await redis.get(`polling:${pollingId}`);
+  if (!raw) return null;
+
+  try {
+    const parsed = JSON.parse(raw) as Partial<PollingSession>;
+    if (!parsed || typeof parsed !== 'object') return null;
+    return {
+      pollingId: String(parsed.pollingId ?? pollingId),
+      restoreId: String(parsed.restoreId ?? ''),
+      targetId: String(parsed.targetId ?? ''),
+      subName: String(parsed.subName ?? ''),
+      currentAttempt: typeof parsed.currentAttempt === 'number' ? parsed.currentAttempt : 0,
+      maxAttempts: typeof parsed.maxAttempts === 'number' ? parsed.maxAttempts : VERIFICATION_MAX_ATTEMPTS,
+      isActive: parsed.isActive !== false,
+      verified: parsed.verified === true,
+      timedOut: parsed.timedOut === true,
+      lastAttemptAt: typeof parsed.lastAttemptAt === 'string' ? parsed.lastAttemptAt : undefined,
+      lastVerification: parsed.lastVerification && typeof parsed.lastVerification === 'object'
+        ? (parsed.lastVerification as VerificationResult)
+        : undefined,
+      createdAt: typeof parsed.createdAt === 'string' ? parsed.createdAt : new Date().toISOString(),
+      completedAt: typeof parsed.completedAt === 'string' ? parsed.completedAt : undefined,
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function writePollingSession(session: PollingSession): Promise<void> {
+  await redis.set(`polling:${session.pollingId}`, JSON.stringify(session));
+  await redis.expire(`polling:${session.pollingId}`, POLLING_SESSION_TTL_SECONDS);
+}
+
 const DEFAULT_AUTOMOD_PAGE = 'config/automoderator' as const;
 const AUTOMOD_PAGE_CANDIDATES = [DEFAULT_AUTOMOD_PAGE, 'automoderator'] as const;
 
@@ -137,7 +282,6 @@ async function ensureWikiReadAccess(subredditName: string): Promise<void> {
     JSON.stringify(permissions),
   );
 
-  // Check if user has wiki permission or if they have all permissions
   const hasWikiPermission = permissions.includes('wiki');
   const hasAllPermissions =
     permissions.length === 0 ||
@@ -162,67 +306,24 @@ function resolveAutomodPageName(wikiPages: unknown): string | null {
   return null;
 }
 
-// ─── Single capture function used by both POST /snapshot and triggers ─────────
-// Stores everything in a consistent shape so the restore route can always
-// find data.rules, data.flairs.post, data.flairs.user, data.automoderator.
+// ─── Capture only restorable sections (Devvit Web API limitation) ──────────────
+// Devvit Web provides no write methods for: subreddit settings, appearance, widgets,
+// removal reasons, user management. Only the sections below can be restored.
 async function captureNormalizedSnapshot(subName: string): Promise<Record<string, unknown>> {
   const [
-    subredditInfo,
     rules,
-    removalReasons,
     postFlairs,
     userFlairs,
-    widgets,
-    wikiPages,
-    bannedUsers,
-    mutedUsers,
-    approvedUsers,
-    moderators,
   ] = await Promise.all([
-    safeFetch(() => reddit.getSubredditInfoByName(subName), null),
     safeFetch(() => reddit.getRules(subName), []),
-    safeFetch(() => reddit.getSubredditRemovalReasons(subName), []),
     safeFetch(() => reddit.getPostFlairTemplates(subName), []),
     safeFetch(() => reddit.getUserFlairTemplates(subName), []),
-    safeFetch(() => reddit.getWidgets(subName), null),
-    safeFetch(() => reddit.getWikiPages(subName), []),
-    safeFetch(async () => {
-      const users: Array<Record<string, unknown>> = [];
-      for await (const u of reddit.getBannedUsers({ subredditName: subName, limit: 100 })) {
-        users.push({ username: u.username, note: (u as any).banNote ?? '' });
-        if (users.length >= 100) break;
-      }
-      return users;
-    }, []),
-    safeFetch(async () => {
-      const users: Array<Record<string, unknown>> = [];
-      for await (const u of reddit.getMutedUsers({ subredditName: subName, limit: 100 })) {
-        users.push({ username: u.username });
-        if (users.length >= 100) break;
-      }
-      return users;
-    }, []),
-    safeFetch(async () => {
-      const users: Array<Record<string, unknown>> = [];
-      for await (const u of reddit.getApprovedUsers({ subredditName: subName, limit: 100 })) {
-        users.push({ username: u.username });
-        if (users.length >= 100) break;
-      }
-      return users;
-    }, []),
-    safeFetch(async () => {
-      const mods: Array<Record<string, unknown>> = [];
-      for await (const m of reddit.getModerators({ subredditName: subName })) {
-        mods.push({ username: m.username, permissions: (m as any).permissions ?? [] });
-        if (mods.length >= 100) break;
-      }
-      return mods;
-    }, []),
   ]);
 
   let automoderator = 'Not configured';
   try {
     await ensureWikiReadAccess(subName);
+    const wikiPages = await safeFetch(() => reddit.getWikiPages(subName), []);
     const resolvedPage = resolveAutomodPageName(wikiPages) ?? DEFAULT_AUTOMOD_PAGE;
     const wiki = await reddit.getWikiPage(subName, resolvedPage);
     automoderator = wiki.content;
@@ -239,10 +340,6 @@ async function captureNormalizedSnapshot(subName: string): Promise<Record<string
     }
   }
 
-  const info = subredditInfo as any;
-
-  // Normalize rules — store the exact fields addRule() needs so restore
-  // can pass them straight back without any guessing.
   const normalizedRules = (rules as any[]).map((r: any, i: number) => ({
     shortName: r.shortName ?? r.name ?? `Rule ${i + 1}`,
     description: r.description ?? '',
@@ -251,7 +348,6 @@ async function captureNormalizedSnapshot(subName: string): Promise<Record<string
     priority: r.priority ?? i,
   }));
 
-  // Normalize flairs — store the exact fields createPostFlairTemplate() needs.
   const normalizedPostFlairs = (postFlairs as any[]).map((f: any) => ({
     id: f.id ?? '',
     text: f.text ?? '',
@@ -271,58 +367,12 @@ async function captureNormalizedSnapshot(subName: string): Promise<Record<string
   }));
 
   return {
-    identity: info ? {
-      displayName: info.name ?? subName,
-      title: info.title ?? '',
-      description: info.description ?? '',
-      publicDescription: info.publicDescription ?? '',
-      subredditType: info.subredditType ?? info.type ?? '',
-      nsfw: typeof info.over18 === 'boolean' ? info.over18 : (info.nsfw ?? false),
-      subscribers: info.subscribers ?? 0,
-      createdAt: info.createdAt ?? '',
-      lang: info.lang ?? 'en',
-      allowGalleries: info.allowGalleries ?? null,
-      allowImages: info.allowImages ?? null,
-      allowVideos: info.allowVideos ?? null,
-      allowPolls: info.allowPolls ?? null,
-    } : null,
-    settings: info ? {
-      title: info.title ?? '',
-      publicDescription: info.publicDescription ?? '',
-      description: info.description ?? '',
-      subredditType: info.subredditType ?? info.type ?? '',
-      nsfw: typeof info.over18 === 'boolean' ? info.over18 : (info.nsfw ?? false),
-      lang: info.lang ?? 'en',
-      allowGalleries: info.allowGalleries ?? null,
-      allowImages: info.allowImages ?? null,
-      allowVideos: info.allowVideos ?? null,
-      allowPolls: info.allowPolls ?? null,
-    } : null,
-    // These three sections are what restore actually writes back to Reddit:
     rules: normalizedRules,
     flairs: {
       post: normalizedPostFlairs,
       user: normalizedUserFlairs,
     },
     automoderator,
-    // Read-only / informational sections:
-    removalReasons: (removalReasons as any[]).map((r: any) => ({
-      id: r.id ?? '',
-      title: r.title ?? '',
-      message: r.message ?? '',
-    })),
-    widgets: widgets ? (widgets as any[]).map((w: any) => ({
-      id: w.id ?? '',
-      name: w.name ?? '',
-      type: w.kind ?? w.type ?? '',
-    })) : null,
-    wikiPages,
-    userManagement: {
-      banned: bannedUsers,
-      muted: mutedUsers,
-      approved: approvedUsers,
-      moderators,
-    },
     capturedAt: new Date().toISOString(),
   };
 }
@@ -363,7 +413,6 @@ snapshot.post('/', async (c) => {
     const subName = context.subredditName;
     if (!subName) return c.json({ error: 'Missing subreddit context' }, 400);
 
-    // Get the current moderator's username
     const creator = await safeFetch(() => reddit.getCurrentUsername(), 'UnknownMod');
     message = `${message} — by ${creator}`;
 
@@ -380,14 +429,13 @@ snapshot.post('/', async (c) => {
     ]);
 
     console.log('[SubVault] Manual snapshot saved:', id);
-    
-    // Extract author from message for response
+
     let author = 'Manual Commit';
     const match = message.match(/— by (.+)$/);
     if (match?.[1]) {
       author = match[1];
     }
-    
+
     return c.json({
       id,
       author,
@@ -467,12 +515,131 @@ snapshot.get('/:id/diff', async (c) => {
   }
 });
 
+// ─── GET /api/snapshot/polling-sessions ───────────────────────────────────
+snapshot.get('/polling-sessions', async (c) => {
+  try {
+    // Prefer direct KEYS call if available on the Redis client; otherwise return empty
+    const keys: string[] = typeof (redis as any).keys === 'function' ? await (redis as any).keys('polling:*') : [];
+
+    const sessions: PollingSession[] = [];
+    for (const key of keys) {
+      try {
+        const raw = await redis.get(key);
+        if (!raw) continue;
+        const parsed = JSON.parse(raw) as PollingSession;
+        sessions.push(parsed);
+      } catch (err) {
+        console.warn('[SubVault] Failed to parse polling session:', String(err).slice(0, 120));
+      }
+    }
+
+    sessions.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    return c.json({ sessions });
+  } catch (err) {
+    console.error('[SubVault] Failed to list polling sessions:', err);
+    return c.json({ error: 'Failed to list polling sessions' }, 500);
+  }
+});
+
+
+// ─── GET /api/snapshot/:pollingId/verify-status ──────────────────────────────
+snapshot.get('/:pollingId/verify-status', async (c) => {
+  const pollingId = c.req.param('pollingId');
+
+  try {
+    const session = await readPollingSession(pollingId);
+    if (!session) {
+      return c.json({ error: 'Polling session not found' }, 404);
+    }
+
+    if (session.verified || session.timedOut || !session.isActive) {
+      return c.json(session);
+    }
+
+    if (session.currentAttempt >= session.maxAttempts) {
+      session.isActive = false;
+      session.timedOut = true;
+      session.completedAt = new Date().toISOString();
+      await writePollingSession(session);
+      return c.json(session);
+    }
+
+    const now = Date.now();
+    if (session.lastAttemptAt) {
+      const elapsed = now - new Date(session.lastAttemptAt).getTime();
+      if (Number.isFinite(elapsed) && elapsed < VERIFICATION_POLL_INTERVAL_MS) {
+        return c.json({
+          ...session,
+          nextPollAfterMs: VERIFICATION_POLL_INTERVAL_MS - elapsed,
+        });
+      }
+    }
+
+    const targetSnapshot = await loadStoredSnapshot(session.targetId);
+    if (!targetSnapshot?.data) {
+      session.isActive = false;
+      session.completedAt = new Date().toISOString();
+      session.lastVerification = {
+        sectionsChanged: 0,
+        totalAdditions: 0,
+        totalDeletions: 0,
+        sections: [],
+        verifiedAt: new Date().toISOString(),
+        verified: false,
+        notes: ['Target snapshot could not be loaded for verification.'],
+      };
+      await writePollingSession(session);
+      return c.json(session, 500);
+    }
+
+    session.currentAttempt += 1;
+    session.lastAttemptAt = new Date().toISOString();
+
+    await redis.expire(`restore_in_progress:${session.subName}`, 60);
+
+    const liveData = await captureNormalizedSnapshot(session.subName);
+    const verification = buildVerificationResult(targetSnapshot.data, liveData);
+    session.lastVerification = verification;
+
+    if (verification.verified) {
+      session.isActive = false;
+      session.verified = true;
+      session.completedAt = new Date().toISOString();
+      await saveVerificationSnapshot(
+        `verify_${pollingId}`,
+        'Verification capture after restore — by SubVault',
+        liveData,
+      );
+      await writePollingSession(session);
+      return c.json(session);
+    }
+
+    if (session.currentAttempt >= session.maxAttempts) {
+      session.isActive = false;
+      session.timedOut = true;
+      session.completedAt = new Date().toISOString();
+      await saveVerificationSnapshot(
+        `verify_${pollingId}`,
+        'Verification capture after restore — by SubVault',
+        liveData,
+      );
+      await writePollingSession(session);
+      return c.json(session, 408);
+    }
+
+    await writePollingSession(session);
+    return c.json(session);
+  } catch (err) {
+    console.error('[SubVault] Failed to fetch verification status:', err);
+    return c.json({ error: 'Failed to fetch verification status' }, 500);
+  }
+});
+
 // ─── POST /api/snapshot/:id/restore ──────────────────────────────────────────
 snapshot.post('/:id/restore', async (c) => {
   try {
-    const body = await c.req.json<{ targetId?: string; deleteAutomodIfMissing?: boolean }>();
+    const body = await c.req.json<{ targetId?: string }>();
     const targetId = body.targetId;
-    const deleteAutomodIfMissing = body.deleteAutomodIfMissing === true;
     if (!targetId) return c.json({ error: 'targetId is required' }, 400);
 
     let targetRaw = await redis.get(`snapshot:${targetId}`);
@@ -501,10 +668,6 @@ snapshot.post('/:id/restore', async (c) => {
       }
     };
 
-    // ── Helpers to read data regardless of which snapshot shape wrote it ──────
-
-    // Rules: read from data.rules (both old and new shape use this key)
-    // Normalize on the way out so addRule() always gets the right fields.
     const readRules = (): Array<Record<string, unknown>> => {
       const raw = d['rules'];
       if (!Array.isArray(raw)) return [];
@@ -517,14 +680,13 @@ snapshot.post('/:id/restore', async (c) => {
       }));
     };
 
-    // Flairs: both shapes store under data.flairs.post / data.flairs.user
     const readFlairs = (kind: 'post' | 'user'): Array<Record<string, unknown>> => {
       const block = d['flairs'] as Record<string, unknown> | undefined;
       const arr = block?.[kind];
       return Array.isArray(arr) ? arr as Array<Record<string, unknown>> : [];
     };
 
-    // ── 1. Rules (additive restore — Devvit cannot delete rules) ──────────────
+    // ── 1. Rules ──────────────────────────────────────────────────────────────
     await attempt('rules', async () => {
       const snapshotRules = readRules();
 
@@ -533,7 +695,6 @@ snapshot.post('/:id/restore', async (c) => {
         return;
       }
 
-      // Fetch current rules to avoid creating duplicates
       const currentRules = await reddit.getRules(subName);
       const currentRuleNames = new Set(
         currentRules.map((r: any) => (r.shortName ?? '').toLowerCase()),
@@ -544,8 +705,6 @@ snapshot.post('/:id/restore', async (c) => {
       let addedCount = 0;
       for (const rule of sorted) {
         const shortName = (rule['shortName'] as string) || 'Rule';
-
-        // Only create the rule if it doesn't already exist on the subreddit
         if (!currentRuleNames.has(shortName.toLowerCase())) {
           await reddit.createRule(subName, {
             shortName,
@@ -557,7 +716,6 @@ snapshot.post('/:id/restore', async (c) => {
         }
       }
 
-      // Note: Devvit cannot delete existing rules. We add missing ones only.
       restoreResults['rules'] = {
         success: true,
         count: addedCount,
@@ -574,73 +732,44 @@ snapshot.post('/:id/restore', async (c) => {
 
       console.log('[SubVault] Restoring automoderator — snapshot value present:', typeof rawConfig === 'string' ? `${rawConfig.length} chars` : String(rawConfig));
 
-      // Prefer resolving the automod page from the *current* wiki pages list,
-      // falling back to the snapshot's wikiPages if necessary. This avoids
-      // updating the wrong page when wiki page names have changed since the
-      // snapshot was taken.
       const currentWikiPages = await safeFetch(() => reddit.getWikiPages(subName), []);
       const resolvedPage =
         resolveAutomodPageName(currentWikiPages) ?? resolveAutomodPageName(d['wikiPages']) ?? DEFAULT_AUTOMOD_PAGE;
       console.log('[SubVault] Resolved automod wiki page for restore:', resolvedPage);
 
-      // Log a short preview of the snapshot content for debugging
-      const preview = typeof rawConfig === 'string' ? rawConfig.slice(0, 200).replace(/\s+/g, ' ') : String(rawConfig);
-      console.log('[SubVault] Snapshot automoderator preview:', preview);
-      // If snapshot indicates automod is not configured, optionally delete/blank the wiki page
       if (rawConfig === 'Not configured' || typeof rawConfig !== 'string' || rawConfig.trim() === '') {
-        if (!deleteAutomodIfMissing) {
-          console.log('[SubVault] Skipping automoderator restore (snapshot indicates not configured and deleteAutomodIfMissing=false)');
-          restoreResults['automoderator'] = { success: true, skipped: true };
+        // When snapshot says "Not configured", always delete/blank the current automod to match
+        if (rawConfig === 'Not configured') {
+          console.log('[SubVault] Snapshot indicates no automod — deleting current automod page to match snapshot state');
+
+          try {
+            if (typeof (reddit as any).deleteWikiPage === 'function') {
+              await (reddit as any).deleteWikiPage({ subredditName: subName, page: resolvedPage });
+              console.log('[SubVault] deleteWikiPage succeeded');
+            } else {
+              await reddit.updateWikiPage({
+                subredditName: subName,
+                page: resolvedPage,
+                content: '',
+                reason: 'SubVault: removed AutoModerator via restore (snapshot indicated none)',
+              });
+              console.log('[SubVault] updateWikiPage (blank) succeeded');
+            }
+          } catch (err) {
+            console.warn('[SubVault] Error deleting automod during restore:', String(err).slice(0, 200));
+          }
+
+          restoreResults['automoderator'] = { success: true };
           return;
         }
 
-        // perform destructive removal/blanking as explicitly requested
-        console.log(`[SubVault] deleteAutomodIfMissing=true — removing automoderator page (${resolvedPage}) for r/${subName}`);
-
-        // Read current page before attempting delete/blank
-        try {
-          const before = await safeFetch(() => reddit.getWikiPage(subName, resolvedPage), null as any);
-          console.log('[SubVault] Pre-delete wiki page content:', before ? `present (${String(before.content ?? '').length} chars)` : 'null/404');
-        } catch (e) {
-          console.warn('[SubVault] Pre-delete wiki page read failed:', String(e).slice(0, 200));
-        }
-
-        // Prefer deleteWikiPage if available; otherwise blank the page via update
-        if (typeof (reddit as any).deleteWikiPage === 'function') {
-          await (reddit as any).deleteWikiPage({ subredditName: subName, page: resolvedPage });
-          console.log('[SubVault] deleteWikiPage succeeded');
-        } else {
-          await reddit.updateWikiPage({
-            subredditName: subName,
-            page: resolvedPage,
-            content: '',
-            reason: 'SubVault: removed AutoModerator via restore',
-          });
-          console.log('[SubVault] updateWikiPage (blank) succeeded');
-        }
-
-        // verify result
-        try {
-          const check = await safeFetch(() => reddit.getWikiPage(subName, resolvedPage), null as any);
-          console.log('[SubVault] Post-delete check wiki page content:', check ? `present (${String(check.content ?? '').length} chars)` : 'null/404');
-        } catch (e) {
-          console.warn('[SubVault] Post-delete verification failed:', String(e).slice(0, 200));
-        }
-
-        restoreResults['automoderator'] = { success: true };
+        // For other empty cases, skip restore
+        console.log('[SubVault] Skipping automoderator restore (no data in snapshot)');
+        restoreResults['automoderator'] = { success: true, skipped: true };
         return;
       }
 
-      // Otherwise restore the automod config from the snapshot
       await ensureWikiReadAccess(subName);
-
-      // Read current page before update for diagnostics
-      try {
-        const before = await safeFetch(() => reddit.getWikiPage(subName, resolvedPage), null as any);
-        console.log('[SubVault] Pre-restore wiki page content:', before ? `present (${String(before.content ?? '').length} chars)` : 'null/404');
-      } catch (e) {
-        console.warn('[SubVault] Pre-restore wiki page read failed:', String(e).slice(0, 200));
-      }
 
       await reddit.updateWikiPage({
         subredditName: subName,
@@ -648,17 +777,6 @@ snapshot.post('/:id/restore', async (c) => {
         content: rawConfig,
         reason: 'SubVault: restored from snapshot',
       });
-
-      // verify the updated page contains the content we just wrote
-      try {
-        const check = await safeFetch(() => reddit.getWikiPage(subName, resolvedPage), null as any);
-        console.log('[SubVault] Post-restore wiki page content length:', check ? String(check.content ?? '').length : 'null');
-        if (check && typeof check.content === 'string' && check.content.trim() !== rawConfig.trim()) {
-          console.warn('[SubVault] Warning: Post-restore wiki content does not match snapshot content (lengths:', String(check.content.length), 'vs', String((rawConfig as string).length), ')');
-        }
-      } catch (e) {
-        console.warn('[SubVault] Post-restore verification failed:', String(e).slice(0, 200));
-      }
 
       restoreResults['automoderator'] = { success: true };
     });
@@ -733,17 +851,42 @@ snapshot.post('/:id/restore', async (c) => {
     ]);
 
     console.log(`[SubVault] Restore complete. Audit snapshot: ${newId}`);
-    console.log('[SubVault] Restore results:', JSON.stringify(restoreResults, null, 2));
 
     const anyFailed = Object.values(restoreResults).some(r => !r.success);
+
+    // Summary: only restorable sections are applied (rules, automoderator, flairs)
+    // Note: other sections (settings, appearance, widgets, etc.) are read-only in Devvit Web API
+    console.log('[SubVault] Restore results (restorable sections only):', JSON.stringify(restoreResults, null, 2));
+
+    // Set a flag in Redis to prevent auto-snapshots during Reddit propagation
+    await redis.set(`restore_in_progress:${subName}`, 'true');
+    await redis.expire(`restore_in_progress:${subName}`, 60);
+    console.log(`[SubVault] Set restore_in_progress flag for r/${subName} (60s TTL)`);
+    const pollingId = `poll_${timestamp}`;
+    const pollingSession: PollingSession = {
+      pollingId,
+      restoreId: newId,
+      targetId,
+      subName,
+      currentAttempt: 0,
+      maxAttempts: VERIFICATION_MAX_ATTEMPTS,
+      isActive: true,
+      verified: false,
+      timedOut: false,
+      createdAt: new Date().toISOString(),
+    };
+
+    await writePollingSession(pollingSession);
+
     return c.json({
       success: true,
       partialFailure: anyFailed,
       newId,
+      pollingId,
       restoreResults,
       message: anyFailed
-        ? 'Restore completed with some failures — check restoreResults for details.'
-        : 'Snapshot fully restored to subreddit.',
+        ? 'Restore completed with some failures — verify status will continue to poll the live state.'
+        : 'Restore applied successfully. Verifying snapshot match in the background.',
     });
   } catch (err) {
     console.error('[SubVault] Failed to restore snapshot:', err);
