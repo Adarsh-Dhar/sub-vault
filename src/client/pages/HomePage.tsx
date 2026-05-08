@@ -71,20 +71,28 @@ export default function Dashboard() {
   const handleViewDetails = async (snapshot: CommitSnapshot) => {
     try {
       const response = await fetch(`/api/snapshot/${snapshot.id}`);
-      if (response.ok) {
-        const data = await response.json();
-          console.log('[SubVault] Snapshot detail fetched (client):', data);
-        const detailSnapshot: SnapshotDetail = {
-          ...data,
-          timestamp: new Date(data.timestamp),
-        };
-        setSelectedDetail(detailSnapshot);
-        setIsDetailModalOpen(true);
-      } else {
-        console.error('[SubVault] Failed to fetch snapshot details:', response.status);
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => null);
+        const errorMsg = errorData?.error || `Failed to load snapshot details (${response.status})`;
+        console.error('[SubVault] Failed to fetch snapshot details:', response.status, errorMsg);
+        // Show error as toast
+        const { toast } = await import('sonner');
+        toast.error('Failed to load snapshot', { description: errorMsg });
+        return;
       }
+      
+      const data = await response.json();
+      console.log('[SubVault] Snapshot detail fetched (client):', data);
+      const detailSnapshot: SnapshotDetail = {
+        ...data,
+        timestamp: new Date(data.timestamp),
+      };
+      setSelectedDetail(detailSnapshot);
+      setIsDetailModalOpen(true);
     } catch (error) {
       console.error('[SubVault] Error fetching snapshot details:', error);
+      const { toast } = await import('sonner');
+      toast.error('Error loading snapshot', { description: 'An unexpected error occurred while fetching snapshot details' });
     }
   };
 

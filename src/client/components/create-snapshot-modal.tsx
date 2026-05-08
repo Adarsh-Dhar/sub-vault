@@ -42,7 +42,7 @@ export function CreateSnapshotModal({ isOpen, onClose, onCreate }: CreateSnapsho
       <DialogContent className="sm:max-w-125">
         <DialogHeader>
           <DialogTitle>Create New Snapshot</DialogTitle>
-          <DialogDescription>
+          <DialogDescription className='sr-only'>
             Create a new snapshot to capture the current state of your vault.
           </DialogDescription>
         </DialogHeader>
