@@ -20,6 +20,7 @@ export default function SnapshotsPage() {
   const [detailError, setDetailError] = useState<string | null>(null);
   const [isDetailLoading, setIsDetailLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const [isApplyingSettings, setIsApplyingSettings] = useState(false);
   
   const [snapshots, setSnapshots] = useState<CommitSnapshot[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -92,6 +93,38 @@ export default function SnapshotsPage() {
     }
   };
 
+  const handleApplySettings = async () => {
+    if (isApplyingSettings) {
+      return;
+    }
+
+    setIsApplyingSettings(true);
+
+    try {
+      const response = await fetch('/api/apply-settings', { method: 'POST' });
+      const data = await response.json().catch(() => null);
+
+      if (!response.ok) {
+        const errorMessage = data?.error || data?.summary || `Failed to apply settings (${response.status})`;
+        console.error('[SubVault] Failed to apply settings:', response.status, errorMessage);
+        const { toast } = await import('sonner');
+        toast.error('Settings update failed', { description: errorMessage });
+        return;
+      }
+
+      const summary = data?.summary || 'Settings applied';
+      console.log('[SubVault] Settings applied:', data);
+      const { toast } = await import('sonner');
+      toast.success('Settings applied', { description: summary });
+    } catch (error) {
+      console.error('[SubVault] Error applying settings:', error);
+      const { toast } = await import('sonner');
+      toast.error('Settings update failed', { description: 'An unexpected error occurred while applying subreddit settings' });
+    } finally {
+      setIsApplyingSettings(false);
+    }
+  };
+
   return (
     <DashboardLayout>
       <div className="space-y-6">
@@ -113,6 +146,8 @@ export default function SnapshotsPage() {
           onCreateSnapshot={() => {
             console.log('Create snapshot');
           }}
+          onApplySettings={handleApplySettings}
+          isApplyingSettings={isApplyingSettings}
           searchQuery={searchQuery}
           onSearchChange={setSearchQuery}
         />

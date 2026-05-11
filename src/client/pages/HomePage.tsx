@@ -19,6 +19,7 @@ export default function Dashboard() {
   const [selectedMod, setSelectedMod] = useState<string | null>(null);
   const [snapshots, setSnapshots] = useState<CommitSnapshot[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [isApplyingSettings, setIsApplyingSettings] = useState(false);
 
   useEffect(() => {
     async function fetchSnapshots() {
@@ -124,6 +125,38 @@ export default function Dashboard() {
     }
   };
 
+  const handleApplySettings = async () => {
+    if (isApplyingSettings) {
+      return;
+    }
+
+    setIsApplyingSettings(true);
+
+    try {
+      const response = await fetch('/api/apply-settings', { method: 'POST' });
+      const data = await response.json().catch(() => null);
+
+      if (!response.ok) {
+        const errorMessage = data?.error || data?.summary || `Failed to apply settings (${response.status})`;
+        console.error('[SubVault] Failed to apply settings:', response.status, errorMessage);
+        const { toast } = await import('sonner');
+        toast.error('Settings update failed', { description: errorMessage });
+        return;
+      }
+
+      const summary = data?.summary || 'Settings applied';
+      console.log('[SubVault] Settings applied:', data);
+      const { toast } = await import('sonner');
+      toast.success('Settings applied', { description: summary });
+    } catch (error) {
+      console.error('[SubVault] Error applying settings:', error);
+      const { toast } = await import('sonner');
+      toast.error('Settings update failed', { description: 'An unexpected error occurred while applying subreddit settings' });
+    } finally {
+      setIsApplyingSettings(false);
+    }
+  };
+
   return (
     <DashboardLayout>
       <div className="space-y-6 sm:space-y-8">
@@ -134,6 +167,8 @@ export default function Dashboard() {
 
         <TopNavigation
           onCreateSnapshot={() => setIsCreateModalOpen(true)}
+          onApplySettings={handleApplySettings}
+          isApplyingSettings={isApplyingSettings}
           searchQuery={searchQuery}
           onSearchChange={setSearchQuery}
         />

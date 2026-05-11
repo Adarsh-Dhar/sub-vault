@@ -1,16 +1,24 @@
 
-import { Plus, Search } from 'lucide-react';
+import { Loader2, Plus, Search, SlidersHorizontal } from 'lucide-react';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { ThemeToggle } from './theme-toggle';
 
 interface TopNavigationProps {
   onCreateSnapshot: () => void;
+  onApplySettings: () => void;
+  isApplyingSettings?: boolean;
   searchQuery?: string;
   onSearchChange?: (query: string) => void;
 }
 
-export function TopNavigation({ onCreateSnapshot, searchQuery = '', onSearchChange }: TopNavigationProps) {
+export function TopNavigation({
+  onCreateSnapshot,
+  onApplySettings,
+  isApplyingSettings = false,
+  searchQuery = '',
+  onSearchChange,
+}: TopNavigationProps) {
   return (
     <div className="flex flex-col sm:flex-row gap-3 sm:gap-4 items-stretch sm:items-center justify-between mb-6">
       <div className="flex-1 relative min-w-0">
@@ -24,6 +32,16 @@ export function TopNavigation({ onCreateSnapshot, searchQuery = '', onSearchChan
       </div>
       <div className="flex items-center gap-2 shrink-0">
         <ThemeToggle />
+        <Button
+          onClick={onApplySettings}
+          disabled={isApplyingSettings}
+          variant="outline"
+          className="border-border text-foreground flex items-center gap-2 text-sm sm:text-base h-10 sm:h-auto whitespace-nowrap"
+        >
+          {isApplyingSettings ? <Loader2 className="h-4 w-4 shrink-0 animate-spin" /> : <SlidersHorizontal className="h-4 w-4 shrink-0" />}
+          <span className="hidden sm:inline">Apply Settings</span>
+          <span className="sm:hidden">Apply</span>
+        </Button>
         <Button
           onClick={onCreateSnapshot}
           className="bg-primary hover:bg-primary/90 text-primary-foreground flex items-center gap-2 text-sm sm:text-base h-10 sm:h-auto whitespace-nowrap"
