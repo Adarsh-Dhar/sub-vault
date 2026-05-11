@@ -309,8 +309,8 @@ export async function captureFullCommunitySnapshot(subredditName: string) {
   const themeColor = normalizeHexColor((infoResult as any)?.keyColor) ?? normalizeHexColor((infoResult as any)?.primaryColor);
   if (themeColor) {
     subredditSettings = subredditSettings ?? {};
+    subredditSettings['legacyPrimaryColor'] = themeColor;
     subredditSettings['keyColor'] = themeColor;
-    subredditSettings['primaryColor'] = themeColor;
   }
 
   return {

@@ -129,12 +129,12 @@ function resolveThemeColor(
   identityData: Record<string, unknown> | null | undefined,
 ): string | null {
   const candidates: unknown[] = [
+    settingsData?.['legacyPrimaryColor'],  // ← what Devvit keyColor write actually stores
     settingsData?.['keyColor'],
-    settingsData?.['primaryColor'],
     settingsData?.['mobileKeyColor'],
-    settingsData?.['legacyPrimaryColor'],
     identityData?.['keyColor'],
     identityData?.['primaryColor'],
+    // removed settingsData['primaryColor'] — that's Reddit's own internal color, not yours
   ];
 
   for (const c of candidates) {
@@ -444,7 +444,7 @@ async function captureSnapshot(subName: string): Promise<Record<string, unknown>
   if (themeColor) {
     communitySettings['keyColor'] = themeColor;
     // Keep the alias for older UI code / diffs, but treat keyColor as canonical.
-    communitySettings['primaryColor'] = themeColor;
+    communitySettings['legacyPrimaryColor'] = themeColor;
   }
 
   const normalizedRules = Array.isArray(rules)
@@ -529,7 +529,7 @@ function normalizeSettingsForVerification(s: Record<string, any>): Record<string
   // `primaryColor` is inconsistent across API shapes and not reliably restorable.
   // Treat `keyColor` as the only canonical theme verification key.
   delete copy['primaryColor'];
-  delete copy['legacyPrimaryColor'];
+  // delete copy['legacyPrimaryColor'];
 
   // Drop volatile / read-only style fields not tracked in appearance section
   delete copy['backgroundColor'];
@@ -1017,7 +1017,7 @@ snapshot.post('/:id/restore', async (c) => {
     const themeColor = resolveThemeColor(settingsData, identityData);
     if (themeColor) {
       appearanceUpdate.keyColor = themeColor;
-      appearanceUpdate.primaryColor = themeColor;
+      // appearanceUpdate.primaryColor = themeColor;
     }
 
     const bannerBgColor = normalizeHexColor(settingsData?.['bannerBackgroundColor']);

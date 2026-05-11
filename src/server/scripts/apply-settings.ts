@@ -19,13 +19,12 @@ import { context, reddit } from '@devvit/web/server';
 
 const TARGET_SETTINGS = {
   // ── Appearance (Devvit can write these) ──────────────────────────────────
-  primaryColor: '#11FF00',        // also stored as keyColor in Devvit
-  legacyPrimaryColor: '#44FF00',  // shown in old Reddit — applied via primaryColor
-  highlightColor: '#051AFA',      // mapped to bannerBackgroundColor if supported
-  backgroundColor: '#FB0404',     // read-only in new Devvit API; logged as skipped
+  primaryColor: '#11FF00',        // writable theme color
+  legacyPrimaryColor: '#44FF00',  // kept as fallback if primaryColor is blank
+  highlightColor: '#051AFA',      // writable banner background color
+  backgroundColor: '#FB0404',     // not writable via updateSettings()
 
-  // Banner / icon images — Devvit API does NOT support updating these directly.
-  // They are stored here for reference only.
+  // Banner / icon images — updateSettings() accepts these on the subreddit type.
   icon: 'https://styles.redditmedia.com/t5_hste7g/styles/communityIcon_fy1do140vg0h1.png?width=64&height=64&frame=1&auto=webp&crop=64:64,smart&s=f6488a93bef0cb5cfa066e9789aaac11087e6a32',
   bannerBackgroundImage: 'https://styles.redditmedia.com/t5_hste7g/styles/bannerBackgroundImage_97qvo140vg0h1.png',
   mobileBannerImage: 'https://styles.redditmedia.com/t5_hste7g/styles/mobileBannerImage_b5noo140vg0h1.png',
@@ -75,31 +74,8 @@ function normalizeHex(v: unknown): string | null {
 
 type Result = { success: boolean; skipped?: boolean; error?: string; detail?: string };
 
-async function assertWikiAccess(subredditName: string): Promise<void> {
-  const username = await reddit.getCurrentUsername();
-  if (!username) throw new Error('Cannot determine current Reddit account');
-
-  const moderators: Array<{ username: string; permissions: string[] }> = [];
-  for await (const moderator of reddit.getModerators({ subredditName })) {
-    moderators.push({
-      username: moderator.username,
-      permissions: (moderator as { permissions?: string[] }).permissions ?? [],
-    });
-
-    if (moderators.length >= 200) break;
-  }
-
-  const self = moderators.find((moderator) => moderator.username.toLowerCase() === username.toLowerCase());
-  if (!self) {
-    throw new Error(`@${username} is not a moderator of r/${subredditName}`);
-  }
-
-  const hasAll = self.permissions.length === 0 || self.permissions.some((permission) => ['all', 'everything', '*'].includes(permission));
-  const hasWiki = self.permissions.includes('wiki');
-
-  if (!hasAll && !hasWiki) {
-    throw new Error(`@${username} needs the wiki moderator permission for r/${subredditName}`);
-  }
+function makeSkippedResult(detail: string): Result {
+  return { success: true, skipped: true, detail };
 }
 
 // ─── Core apply function ──────────────────────────────────────────────────────
@@ -151,46 +127,54 @@ export async function applySettings(subredditName: string): Promise<Record<strin
   }
 
   // ── 2. Appearance / theme colour ──────────────────────────────────────────
-  // Devvit maps primaryColor → keyColor under the hood.
-  // We try primaryColor first (canonical), then fall back to legacyPrimaryColor.
+  // Only write the supported fields from the local SubredditSettings contract.
   const themeColor =
     normalizeHex(TARGET_SETTINGS.primaryColor) ??
     normalizeHex(TARGET_SETTINGS.legacyPrimaryColor);
 
-  if (themeColor) {
-    try {
-      type UpdateSettings = Parameters<typeof subreddit.updateSettings>[0];
-      const appearanceUpdate: UpdateSettings = {
-        keyColor: themeColor,
-        primaryColor: themeColor,
-      };
+  try {
+    type UpdateSettings = Parameters<typeof subreddit.updateSettings>[0];
+    const appearanceUpdate: UpdateSettings = {};
+
+    if (themeColor) {
+      appearanceUpdate.keyColor = themeColor;
+      appearanceUpdate.primaryColor = themeColor;
+    }
+
+    const highlightColor = normalizeHex(TARGET_SETTINGS.highlightColor);
+    if (highlightColor) {
+      appearanceUpdate.bannerBackgroundColor = highlightColor;
+    }
+
+    if (TARGET_SETTINGS.icon) {
+      appearanceUpdate.communityIcon = TARGET_SETTINGS.icon;
+    }
+
+    if (TARGET_SETTINGS.bannerBackgroundImage) {
+      appearanceUpdate.bannerBackgroundImage = TARGET_SETTINGS.bannerBackgroundImage;
+    }
+
+    if (TARGET_SETTINGS.mobileBannerImage) {
+      appearanceUpdate.mobileBannerImage = TARGET_SETTINGS.mobileBannerImage;
+    }
+
+    if (Object.keys(appearanceUpdate).length > 0) {
       await subreddit.updateSettings(appearanceUpdate);
-      results['appearance'] = { success: true, detail: `keyColor/primaryColor → ${themeColor}` };
-    } catch (err) {
-      results['appearance'] = { success: false, error: String(err).slice(0, 300) };
-    }
-  } else {
-    results['appearance'] = { success: true, skipped: true, detail: 'No valid hex colour found' };
-  }
-
-  // ── 3. Fields the Devvit API cannot write (logged for transparency) ────────
-  const readOnlyFields: Record<string, unknown> = {
-    backgroundColor:     TARGET_SETTINGS.backgroundColor,
-    highlightColor:      TARGET_SETTINGS.highlightColor,
-    icon:                TARGET_SETTINGS.icon,
-    bannerBackgroundImage: TARGET_SETTINGS.bannerBackgroundImage,
-    mobileBannerImage:   TARGET_SETTINGS.mobileBannerImage,
-  };
-
-  for (const [k, v] of Object.entries(readOnlyFields)) {
-    if (v) {
-      results[k] = {
+      results['appearance'] = {
         success: true,
-        skipped: true,
-        detail: 'Read-only via Devvit API — change manually in mod tools → appearance',
+        detail: `Updated ${Object.keys(appearanceUpdate).length} appearance fields`,
       };
+    } else {
+      results['appearance'] = { success: true, skipped: true, detail: 'No valid appearance fields found' };
     }
+  } catch (err) {
+    results['appearance'] = { success: false, error: String(err).slice(0, 300) };
   }
+
+  // ── 3. Fields that are not written by this route ──────────────────────────
+  results['backgroundColor'] = makeSkippedResult('Not writable through updateSettings(); keep changing this manually in mod tools → appearance.');
+  results['subredditType'] = makeSkippedResult('Not written here; subreddit type is not part of the confirmed updateSettings payload.');
+  results['nsfw'] = makeSkippedResult('Not written here; subreddit NSFW state is not part of the confirmed updateSettings payload.');
 
   return results;
 }
@@ -204,15 +188,6 @@ applySettingsRoute.post('/', async (c) => {
   if (!subName) return c.json({ error: 'Missing subreddit context' }, 400);
 
   console.log(`[SubVault] applySettings triggered for r/${subName}`);
-
-  try {
-    await assertWikiAccess(subName);
-  } catch (error) {
-    return c.json({
-      success: false,
-      error: String(error).slice(0, 300),
-    }, 403);
-  }
 
   const results = await applySettings(subName);
 
