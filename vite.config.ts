@@ -6,7 +6,7 @@ import { fileURLToPath, URL } from 'node:url';
 
 const stripUseClientPlugin = {
   name: 'strip-use-client',
-  transform(code) {
+  transform(code: string) {
     if (code.includes("'use client'") || code.includes('"use client"')) {
       const transformedCode = code.replace(/['"]use client['"];?\s*/g, '');
       if (transformedCode !== code) {

@@ -134,7 +134,7 @@ const SECTIONS: Array<{
     extract: d => {
       const raw = d['settings'] as Record<string, unknown> | null | undefined;
       if (!raw) return null;
-      // Only track the keys we can actually update via Devvit API
+      // Track ONLY the keys we can update via Devvit API
       const APPEARANCE_KEYS = [
         'keyColor', 'primaryColor', 'headerTitle', 'bannerBackgroundColor'
       ];
@@ -147,7 +147,7 @@ const SECTIONS: Array<{
     extract: d => {
       const raw = d['settings'] as Record<string, unknown> | null | undefined;
       if (!raw) return null;
-      // These keys can be read by getSubredditStyles, but cannot be updated
+      // These keys cannot be updated by Devvit, so we separate them to avoid timeouts
       const READ_ONLY_KEYS = ['backgroundColor', 'highlightColor'];
       return Object.fromEntries(READ_ONLY_KEYS.map(k => [k, raw[k] ?? null]));
     },

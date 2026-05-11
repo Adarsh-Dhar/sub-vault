@@ -48,12 +48,84 @@ describe('buildVerificationResult', () => {
   it('ignores non-restorable appearance fields during verification', () => {
     const target = {
       settings: {
+        backgroundColor: '#111111',
+      },
+    } as any;
+    const live = {
+      settings: {
+        backgroundColor: '#222222',
+      },
+    } as any;
+
+    const result = buildVerificationResult(target, live);
+    expect(result.verified).toBe(true);
+    expect(result.sections.some(s => s.section === 'Appearance / Theme' && s.status === 'drifted')).toBe(false);
+  });
+
+  it('treats primaryColor as a theme alias for older snapshots', () => {
+    const target = {
+      settings: {
         primaryColor: '#111111',
       },
     } as any;
     const live = {
       settings: {
         primaryColor: '#222222',
+      },
+    } as any;
+
+    const result = buildVerificationResult(target, live);
+    expect(result.verified).toBe(false);
+    expect(result.sections.some(s => s.section === 'Appearance / Theme' && s.status === 'drifted')).toBe(true);
+  });
+
+  it('prefers primaryColor when both primary and legacy colors exist', () => {
+    const target = {
+      settings: {
+        primaryColor: '#222222',
+        legacyPrimaryColor: '#111111',
+      },
+    } as any;
+    const live = {
+      settings: {
+        primaryColor: '#222222',
+        legacyPrimaryColor: '#333333',
+      },
+    } as any;
+
+    const result = buildVerificationResult(target, live);
+    expect(result.verified).toBe(true);
+    expect(result.sections.some(s => s.section === 'Appearance / Theme' && s.status === 'drifted')).toBe(false);
+  });
+
+  it('normalizes theme colors with and without leading #', () => {
+    const target = {
+      settings: {
+        keyColor: 'AABBCC',
+      },
+    } as any;
+    const live = {
+      settings: {
+        keyColor: '#aabbcc',
+      },
+    } as any;
+
+    const result = buildVerificationResult(target, live);
+    expect(result.verified).toBe(true);
+    expect(result.sections.some(s => s.section === 'Appearance / Theme' && s.status === 'drifted')).toBe(false);
+  });
+
+  it('ignores legacyPrimaryColor drift during appearance verification', () => {
+    const target = {
+      settings: {
+        keyColor: '#111111',
+        legacyPrimaryColor: '#aaaaaa',
+      },
+    } as any;
+    const live = {
+      settings: {
+        keyColor: '#111111',
+        legacyPrimaryColor: '#bbbbbb',
       },
     } as any;
 

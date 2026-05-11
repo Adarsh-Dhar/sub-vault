@@ -264,14 +264,6 @@ export async function captureFullCommunitySnapshot(subredditName: string) {
   }
 
   // Build identity block from info
-  // Log infoResult for debugging to ensure correct field mapping
-  if (infoResult) {
-    try {
-      console.log('[SubVault] Subreddit infoResult:', JSON.stringify(infoResult, null, 2));
-    } catch (err) {
-      console.log('[SubVault] Subreddit infoResult (inspect):', infoResult);
-    }
-  }
 
   const identity = infoResult
     ? (() => {
@@ -302,6 +294,24 @@ export async function captureFullCommunitySnapshot(subredditName: string) {
         };
       })()
     : null;
+
+  // Ensure theme color is present in settings for restore/verification.
+  // `getSubredditStyles()` often returns theme under different keys.
+  const normalizeHexColor = (value: unknown): string | null => {
+    if (typeof value !== 'string') return null;
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+    const raw = trimmed.startsWith('#') ? trimmed.slice(1) : trimmed;
+    if (!/^[0-9a-fA-F]{6}$/.test(raw)) return null;
+    return `#${raw.toLowerCase()}`;
+  };
+
+  const themeColor = normalizeHexColor((infoResult as any)?.keyColor) ?? normalizeHexColor((infoResult as any)?.primaryColor);
+  if (themeColor) {
+    subredditSettings = subredditSettings ?? {};
+    subredditSettings['keyColor'] = themeColor;
+    subredditSettings['primaryColor'] = themeColor;
+  }
 
   return {
     identity,
