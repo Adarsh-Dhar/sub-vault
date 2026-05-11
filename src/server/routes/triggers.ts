@@ -238,7 +238,10 @@ export async function captureFullCommunitySnapshot(subredditName: string) {
     const resolvedPage = resolveAutomodPageName(wikiPagesResult) ?? DEFAULT_AUTOMOD_PAGE;
     const automodWiki = await reddit.getWikiPage(subredditName, resolvedPage);
     automodConfig = automodWiki.content;
-    console.log('[SubVault] Automod config captured (trigger):', automodConfig.length, 'characters from', resolvedPage);
+    // Only warn if we successfully fetched but got empty content (not the "Not configured" state)
+    if (automodConfig.length === 0) {
+      console.warn('[SubVault] ⚠️ Automod config is empty for "' + resolvedPage + '" — this subreddit has no rules configured');
+    }
   } catch (err) {
     const errMsg = String(err);
     if (errMsg.includes('wiki moderator permission')) {

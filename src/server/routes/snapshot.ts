@@ -120,6 +120,11 @@ function resolveAutomodPage(wikiPages: unknown): string | null {
   return null;
 }
 
+function normalizeAutomodContent(value: unknown): string {
+  const content = extractString(value).trim();
+  return content.length > 0 ? content : 'Not configured';
+}
+
 /**
  * Verify the current user has wiki moderator permission on the subreddit.
  * Throws if they don't.
@@ -303,8 +308,12 @@ async function captureSnapshot(subName: string): Promise<Record<string, unknown>
     const wikiPages = await safeFetch(() => reddit.getWikiPages(subName), []);
     const page = resolveAutomodPage(wikiPages) ?? DEFAULT_AUTOMOD_PAGE;
     const wiki = await reddit.getWikiPage(subName, page);
-    automoderator = wiki.content;
-    console.log(`[SubVault] AutoMod captured: ${automoderator.length} chars from "${page}"`);
+    const rawAutomod = extractString(wiki.content);
+    automoderator = normalizeAutomodContent(rawAutomod);
+    // Only warn if we successfully fetched but got empty content (not the "Not configured" state)
+    if (rawAutomod.length === 0) {
+      console.warn(`[SubVault] ⚠️ AutoMod config is empty for "${page}" — this subreddit has no rules configured`);
+    }
   } catch (err) {
     const msg = String(err);
     if (msg.includes('wiki moderator permission')) throw err;
@@ -470,10 +479,33 @@ function normalizeForVerification(data: Record<string, unknown>): Record<string,
       id.displayName = extractString(id.displayName);
       id.lang = extractString(id.lang);
     }
+    
+    // Normalize hex colors to lowercase to prevent false-drift
+    const s = copy['settings'];
+    if (s && typeof s === 'object') {
+      for (const k of ['keyColor', 'primaryColor', 'backgroundColor', 'highlightColor']) {
+        if (typeof s[k] === 'string') {
+          s[k] = s[k].toLowerCase();
+        }
+      }
+      
+      // NEW: Unify keyColor and primaryColor. 
+      // Reddit's API is inconsistent about which one it leaves empty.
+      // If either has the correct hex code, sync them so the diff passes.
+      const effectiveThemeColor = s['primaryColor'] || s['keyColor'] || '';
+      s['primaryColor'] = effectiveThemeColor;
+      s['keyColor'] = effectiveThemeColor;
+    }
+
+    copy['automoderator'] = normalizeAutomodContent(copy['automoderator']);
     return copy;
   } catch {
     return data;
   }
+}
+
+function isAutomodConfigured(value: unknown): boolean {
+  return normalizeAutomodContent(value) !== 'Not configured';
 }
 
 export function buildVerificationResult(
@@ -483,18 +515,41 @@ export function buildVerificationResult(
   const target = normalizeForVerification(targetData);
   const live = normalizeForVerification(liveData);
 
+  const targetAutomodConfigured = isAutomodConfigured(target['automoderator']);
+
   const diffs = computeSnapshotDiff(target, live);
   const totalAdditions = diffs.reduce((sum, d) => sum + d.additions, 0);
   const totalDeletions = diffs.reduce((sum, d) => sum + d.deletions, 0);
 
-  const restorableSections = new Set(['Identity', 'Rules', 'AutoModerator', 'Post Flairs', 'User Flairs']);
+  const restorableSections = new Set([
+    'Identity',
+    'Rules',
+    'AutoModerator',
+    'Post Flairs',
+    'User Flairs',
+    'Community Settings',
+    'Appearance / Theme'
+  ]);
 
   const sections: VerificationSection[] = diffs.map(d => ({
     section: d.section,
     additions: d.additions,
     deletions: d.deletions,
-    status: restorableSections.has(d.section) ? 'drifted' : 'skipped',
+    status: d.section === 'AutoModerator' && !targetAutomodConfigured
+      ? 'skipped'
+      : restorableSections.has(d.section)
+        ? 'drifted'
+        : 'skipped',
   }));
+
+  if (!targetAutomodConfigured) {
+    const automodSection = sections.find(s => s.section === 'AutoModerator');
+    if (automodSection) {
+      automodSection.status = 'skipped';
+    } else {
+      sections.push({ section: 'AutoModerator', additions: 0, deletions: 0, status: 'skipped' });
+    }
+  }
 
   // Extra guard: explicitly check description fields since they are most likely to drift
   const tId = target['identity'] as Record<string, any> | null | undefined;
@@ -513,8 +568,12 @@ export function buildVerificationResult(
   }
 
   const drifted = sections.filter(s => s.status === 'drifted');
+  const skippedAutoMod = sections.some(s => s.section === 'AutoModerator' && s.status === 'skipped' && !targetAutomodConfigured);
   const notes: string[] = drifted.length === 0
-    ? ['All restored sections match the live subreddit — restore verified successfully. ✓']
+    ? [
+        'All restored sections match the live subreddit — restore verified successfully. ✓',
+        ...(skippedAutoMod ? ['AutoModerator was not configured in the target snapshot, so verification skipped that section.'] : []),
+      ]
     : drifted.map(s =>
         `${s.section}: live state still differs from snapshot (+${s.additions} / -${s.deletions}). ` +
         'Reddit may need a moment to propagate changes, or the Devvit API had a temporary error.'
@@ -737,6 +796,8 @@ snapshot.post('/:id/restore', async (c) => {
 
     const d = target.data;
     const results: Record<string, { success: boolean; count?: number; skipped?: boolean; error?: string }> = {};
+    const subreddit = await reddit.getSubredditByName(subName);
+    type SubredditUpdateSettings = Parameters<typeof subreddit.updateSettings>[0];
 
     async function attempt(name: string, fn: () => Promise<void>): Promise<void> {
       try {
@@ -759,6 +820,99 @@ snapshot.post('/:id/restore', async (c) => {
       const arr = flairs?.[kind];
       return Array.isArray(arr) ? arr as Array<Record<string, unknown>> : [];
     };
+
+    const settingsData = d['settings'] as Record<string, unknown> | null | undefined;
+    const identityData = d['identity'] as Record<string, unknown> | null | undefined;
+
+    const communitySettingsUpdate: SubredditUpdateSettings = {};
+    const appearanceUpdate: SubredditUpdateSettings = {};
+
+    if (identityData) {
+      const title = extractString(identityData['title']);
+      const description = extractString(identityData['description']);
+      if (title) communitySettingsUpdate.title = title;
+      if (description) communitySettingsUpdate.description = description;
+    }
+
+    if (settingsData) {
+      const postingRestricted = settingsData['isPostingRestricted'];
+      if (typeof postingRestricted === 'boolean') communitySettingsUpdate.restrictPosting = postingRestricted;
+
+      const commentingRestricted = settingsData['isCommentingRestricted'];
+      if (typeof commentingRestricted === 'boolean') communitySettingsUpdate.restrictCommenting = commentingRestricted;
+
+      const archivePosts = settingsData['isArchivePostsEnabled'];
+      if (typeof archivePosts === 'boolean') communitySettingsUpdate.shouldArchivePosts = archivePosts;
+
+      const discoveryAllowed = settingsData['isDiscoveryAllowed'];
+      if (typeof discoveryAllowed === 'boolean') communitySettingsUpdate.allowDiscovery = discoveryAllowed;
+
+      const spoilerAvailable = settingsData['isSpoilerAvailable'];
+      if (typeof spoilerAvailable === 'boolean') communitySettingsUpdate.spoilersEnabled = spoilerAvailable;
+
+      const chatPostCreationAllowed = settingsData['isChatPostCreationAllowed'];
+      if (typeof chatPostCreationAllowed === 'boolean') communitySettingsUpdate.allowChatPostCreation = chatPostCreationAllowed;
+
+      const chatPostFeatureEnabled = settingsData['isChatPostFeatureEnabled'];
+      if (typeof chatPostFeatureEnabled === 'boolean') communitySettingsUpdate.chatPostEnabled = chatPostFeatureEnabled;
+
+      const emojisEnabled = settingsData['isEmojisEnabled'];
+      if (typeof emojisEnabled === 'boolean') communitySettingsUpdate.emojisEnabled = emojisEnabled;
+
+      const predictionsAllowed = settingsData['isPredictionAllowed'];
+      if (typeof predictionsAllowed === 'boolean') communitySettingsUpdate.allowPredictions = predictionsAllowed;
+
+      const predictionsTournamentAllowed = settingsData['isPredictionsTournamentAllowed'];
+      if (typeof predictionsTournamentAllowed === 'boolean') communitySettingsUpdate.allowPredictionsTournament = predictionsTournamentAllowed;
+
+      const predictionContributorsAllowed = settingsData['isPredictionContributorsAllowed'];
+      if (typeof predictionContributorsAllowed === 'boolean') communitySettingsUpdate.allowPredictionContributors = predictionContributorsAllowed;
+
+      const crosspostingAllowed = settingsData['isCrosspostingAllowed'];
+      if (typeof crosspostingAllowed === 'boolean') communitySettingsUpdate.crosspostable = crosspostingAllowed;
+
+      const userFlairs = settingsData['authorFlairEnabled'];
+      if (typeof userFlairs === 'boolean') {
+        const authorFlairSelfAssignable = settingsData['authorFlairSelfAssignable'];
+        communitySettingsUpdate.userFlairs = {
+          enabled: userFlairs,
+          usersCanAssign: typeof authorFlairSelfAssignable === 'boolean' ? authorFlairSelfAssignable : false,
+        };
+      }
+
+      const postFlairs = settingsData['postFlairEnabled'];
+      if (typeof postFlairs === 'boolean') {
+        const postFlairSelfAssignable = settingsData['postFlairSelfAssignable'];
+        communitySettingsUpdate.postFlairs = {
+          enabled: postFlairs,
+          usersCanAssign: typeof postFlairSelfAssignable === 'boolean' ? postFlairSelfAssignable : false,
+        };
+      }
+
+      const wikiEditMode = settingsData['wikiEditMode'];
+      if (typeof wikiEditMode === 'string' && wikiEditMode) {
+        communitySettingsUpdate.wikiEnabled = wikiEditMode !== 'disabled';
+      }
+
+      // Devvit API mismatch: it reads the theme color as 'primaryColor', 
+      // but requires 'keyColor' to write it. We map it to both to be safe.
+      // Map all appearance variables to the new Devvit updateSettings API
+      // Map supported appearance variables to the Devvit updateSettings API
+      const pColor = settingsData['primaryColor'] as string | undefined;
+      const kColor = settingsData['keyColor'] as string | undefined;
+      
+      // Fallback logic in case snapshots have mismatched primary/key colors
+      const themeColor = kColor !== undefined ? kColor : (pColor || '');
+      appearanceUpdate.keyColor = themeColor;
+      appearanceUpdate.primaryColor = themeColor;
+
+      // bannerBackgroundColor is supported by updateSettings
+      if (settingsData['bannerBackgroundColor'] !== undefined) {
+        appearanceUpdate.bannerBackgroundColor = (settingsData['bannerBackgroundColor'] as string) || '';
+      }
+
+      const headerTitle = settingsData['headerTitle'];
+      if (headerTitle !== undefined) appearanceUpdate.headerTitle = (headerTitle as string) || '';
 
     // 1. Rules — add missing ones (Devvit can't delete rules)
     await attempt('rules', async () => {
@@ -788,33 +942,61 @@ snapshot.post('/:id/restore', async (c) => {
       }
     });
 
-    // 2. AutoModerator
+    // 2. Community settings
+    await attempt('communitySettings', async () => {
+      if (Object.keys(communitySettingsUpdate).length === 0) {
+        results['communitySettings'] = { success: true, skipped: true };
+        return;
+      }
+
+      await subreddit.updateSettings(communitySettingsUpdate);
+      results['communitySettings'] = { success: true, count: Object.keys(communitySettingsUpdate).length };
+    });
+
+    // 3. Appearance / Theme
+    await attempt('appearance', async () => {
+      if (Object.keys(appearanceUpdate).length === 0) {
+        results['appearance'] = { success: true, skipped: true };
+        return;
+      }
+
+      await subreddit.updateSettings(appearanceUpdate);
+      results['appearance'] = { success: true, count: Object.keys(appearanceUpdate).length };
+    });
+
+    // 4. AutoModerator
     await attempt('automoderator', async () => {
       const config = d['automoderator'];
       const wikiPages = await safeFetch(() => reddit.getWikiPages(subName), []);
       const page = resolveAutomodPage(wikiPages) ?? DEFAULT_AUTOMOD_PAGE;
 
-      if (config === 'Not configured' || typeof config !== 'string' || !config.trim()) {
-        if (config === 'Not configured') {
-          console.log('[SubVault] Blanking automod page (snapshot had none)');
-          await reddit.updateWikiPage({
-            subredditName: subName, page, content: '',
-            reason: 'SubVault: removed AutoModerator (snapshot indicated none)',
-          });
-        } else {
-          results['automoderator'] = { success: true, skipped: true };
-        }
+      // Skip only if config is invalid (not a string)
+      if (typeof config !== 'string') {
+        results['automoderator'] = { success: true, skipped: true };
         return;
       }
 
       await assertWikiAccess(subName);
+      
+      // Determine content and reason based on config state
+      let content: string;
+      let reason: string;
+      
+        const normalizedConfig = normalizeAutomodContent(config);
+        if (normalizedConfig === 'Not configured') {
+        content = '';
+        reason = 'SubVault: removed AutoModerator (snapshot indicated none)';
+      } else {
+          content = normalizedConfig;
+        reason = 'SubVault: restored from snapshot';
+      }
+
       await reddit.updateWikiPage({
-        subredditName: subName, page, content: config,
-        reason: 'SubVault: restored from snapshot',
+        subredditName: subName, page, content, reason,
       });
     });
 
-    // 3. Post flairs — delete all, recreate from snapshot
+    // 5. Post flairs — delete all, recreate from snapshot
     await attempt('postFlairs', async () => {
       const snapshotFlairs = getFlairs('post');
       const current = await reddit.getPostFlairTemplates(subName);
@@ -832,7 +1014,7 @@ snapshot.post('/:id/restore', async (c) => {
       results['postFlairs'] = { success: true, count: snapshotFlairs.length };
     });
 
-    // 4. User flairs — delete all, recreate from snapshot
+    // 6. User flairs — delete all, recreate from snapshot
     await attempt('userFlairs', async () => {
       const snapshotFlairs = getFlairs('user');
       const current = await reddit.getUserFlairTemplates(subName);
@@ -850,10 +1032,10 @@ snapshot.post('/:id/restore', async (c) => {
       results['userFlairs'] = { success: true, count: snapshotFlairs.length };
     });
 
-    // 5. User management — intentionally skipped (too destructive to automate)
+    // 7. User management — intentionally skipped (too destructive to automate)
     results['userManagement'] = { success: true, skipped: true };
 
-    // 6. Save restore audit snapshot
+    // 8. Save restore audit snapshot
     const timestamp = Date.now();
     const auditSnap: StoredSnapshot = {
       id: `restore_${timestamp}`,

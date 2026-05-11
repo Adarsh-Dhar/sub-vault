@@ -115,11 +115,15 @@ const SECTIONS: Array<{
     extract: d => {
       const s = d['settings'] as Record<string, unknown> | null | undefined;
       if (!s) return null;
-      // Only surface fields that users actually configure
       const RELEVANT = [
-        'title', 'publicDescription', 'subredditType', 'nsfw', 'lang',
-        'allowGalleries', 'allowImages', 'allowVideos', 'allowPolls',
-        'subscribers',
+        'title', 'description', 'publicDescription', 'subredditType', 'nsfw', 'lang',
+        'isPostingRestricted', 'isCommentingRestricted', 'isCrosspostingAllowed',
+        'isArchivePostsEnabled', 'isDiscoveryAllowed', 'isSpoilerAvailable',
+        'isChatPostCreationAllowed', 'isChatPostFeatureEnabled', 'isEmojisEnabled',
+        'isPredictionAllowed', 'isPredictionsTournamentAllowed', 'isPredictionContributorsAllowed',
+        'allAllowedPostTypes', 'allowedPostCapabilities', 'allowedMediaInComments',
+        'authorFlairEnabled', 'authorFlairSelfAssignable',
+        'postFlairEnabled', 'postFlairSelfAssignable', 'wikiEditMode',
       ];
       return Object.fromEntries(RELEVANT.map(k => [k, s[k] ?? null]));
     },
@@ -130,12 +134,22 @@ const SECTIONS: Array<{
     extract: d => {
       const raw = d['settings'] as Record<string, unknown> | null | undefined;
       if (!raw) return null;
+      // Only track the keys we can actually update via Devvit API
       const APPEARANCE_KEYS = [
-        'primaryColor', 'highlightColor', 'backgroundColor', 'keyColor',
-        'icon', 'communityIcon', 'bannerBackgroundImage', 'mobileBannerImage',
-        'bannerImg', 'bannerHeight', 'bannerCommunityName',
+        'keyColor', 'primaryColor', 'headerTitle', 'bannerBackgroundColor'
       ];
       return Object.fromEntries(APPEARANCE_KEYS.map(k => [k, raw[k] ?? null]));
+    },
+  },
+  {
+    key: 'advancedTheme',
+    label: 'Advanced Theme (Read-Only)',
+    extract: d => {
+      const raw = d['settings'] as Record<string, unknown> | null | undefined;
+      if (!raw) return null;
+      // These keys can be read by getSubredditStyles, but cannot be updated
+      const READ_ONLY_KEYS = ['backgroundColor', 'highlightColor'];
+      return Object.fromEntries(READ_ONLY_KEYS.map(k => [k, raw[k] ?? null]));
     },
   },
   {
