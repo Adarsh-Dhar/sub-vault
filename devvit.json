@@ -38,11 +38,19 @@
         "location": "subreddit",
         "forUserType": "moderator",
         "endpoint": "/internal/menu/example-form"
+      },
+      {
+        "label": "Quiz Settings",
+        "description": "Configure quiz difficulty, passing score, and other options",
+        "location": "subreddit",
+        "forUserType": "moderator",
+        "endpoint": "/internal/menu/quiz-settings"
       }
     ]
   },
   "forms": {
-    "exampleForm": "/internal/form/example-submit"
+    "exampleForm": "/internal/form/example-submit",
+    "quizSettingsForm": "/internal/form/quiz-settings-submit"
   },
   "triggers": {
     "onModAction": "/internal/triggers/on-mod-action"

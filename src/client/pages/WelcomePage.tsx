@@ -4,10 +4,11 @@
 
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Loader2 } from 'lucide-react';
+import { Loader2, Settings } from 'lucide-react';
 import type { QuizSettings } from '../../shared/quiz-types';
 import { Button } from '../components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
+import { ModSettingsModal } from '../components/ModSettingsModal';
 import { useInit } from '../contexts/init-context';
 import { useToast } from '../hooks/use-toast';
 
@@ -16,13 +17,14 @@ export default function WelcomePage() {
   const { toast } = useToast();
   const [loading, setLoading] = useState(false);
   const [settings, setSettings] = useState<QuizSettings | null>(null);
+  const [settingsModalOpen, setSettingsModalOpen] = useState(false);
   const { init, loading: initLoading, error: initError } = useInit();
 
   // Fetch settings on component mount
   useEffect(() => {
     const fetchSettings = async () => {
       try {
-        const response = await fetch('/api/settings');
+        const response = await fetch('/api/quiz-settings');
         if (response.ok) {
           const data = await response.json() as QuizSettings;
           setSettings(data);
@@ -66,26 +68,43 @@ export default function WelcomePage() {
 
   const difficultyLabel = settings?.difficulty || 'Medium';
   const questionsCount = settings?.questions_count || 5;
-  const username = init?.username && init.username !== 'anonymous' ? init.username : null;
 
   return (
     <div className="flex min-h-screen flex-col items-center justify-center bg-linear-to-br from-primary/5 to-primary/10 px-4 py-8">
       <div className="w-full max-w-md space-y-6">
         {/* Welcome Card */}
         <Card>
-          <CardHeader className="space-y-4 text-center">
-            <div className="flex justify-center">
-              <div className="flex h-16 w-16 items-center justify-center rounded-full bg-primary text-2xl font-bold text-primary-foreground">
-                📚
+          <CardHeader className="space-y-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center justify-center flex-1">
+                <div className="flex h-16 w-16 items-center justify-center rounded-full bg-primary text-2xl font-bold text-primary-foreground">
+                  📚
+                </div>
               </div>
+              {init?.isModerator && (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => setSettingsModalOpen(true)}
+                  title="Configure quiz settings"
+                  className="absolute right-4 top-4"
+                >
+                  <Settings className="h-5 w-5" />
+                </Button>
+              )}
             </div>
-            <CardTitle className="text-3xl font-bold">Welcome!</CardTitle>
-            <p className="text-lg text-muted-foreground">
-              Let's test your knowledge of our community guidelines
-            </p>
-            {username && (
-              <p className="text-sm font-medium text-foreground">Signed in as {username}</p>
-            )}
+            <div className="text-center">
+              <CardTitle className="text-3xl font-bold">Welcome!</CardTitle>
+              <p className="text-lg text-muted-foreground mt-2">
+                Let's test your knowledge of our community guidelines
+              </p>
+              {init?.isModerator && (
+                <p className="text-xs text-primary font-medium mt-2">👑 You're a moderator</p>
+              )}
+              {init?.username && init.username !== 'anonymous' && (
+                <p className="text-sm font-medium text-foreground mt-2">Signed in as {init.username}</p>
+              )}
+            </div>
           </CardHeader>
 
           <CardContent className="space-y-6">
@@ -122,7 +141,7 @@ export default function WelcomePage() {
             {/* Start Button */}
             <Button
               onClick={() => void handleStartQuiz()}
-              disabled={loading || initLoading || !username}
+              disabled={loading || initLoading || !init?.username || init.username === 'anonymous'}
               size="lg"
               className="w-full"
             >
@@ -137,6 +156,16 @@ export default function WelcomePage() {
           </CardContent>
         </Card>
       </div>
+
+      {/* Settings Modal - Only for Moderators */}
+      {init?.isModerator && (
+        <ModSettingsModal
+          open={settingsModalOpen}
+          onOpenChange={setSettingsModalOpen}
+          currentSettings={settings}
+          onSettingsUpdated={setSettings}
+        />
+      )}
     </div>
   );
 }

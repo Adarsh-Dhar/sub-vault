@@ -3,10 +3,8 @@ import { context, redis, reddit } from '@devvit/web/server';
 import type {
   DecrementResponse,
   IncrementResponse,
-  InitResponse,
 } from '../../shared/api';
-import { DEFAULT_QUIZ_SETTINGS } from '../services/quiz-data';
-import type { QuizSettings, SettingsResponse } from '../../shared/quiz-types';
+import type { QuizSettings } from '../../shared/quiz-types';
 
 type ErrorResponse = {
   status: 'error';
@@ -35,11 +33,30 @@ api.get('/init', async (c) => {
       reddit.getCurrentUsername(),
     ]);
 
-    return c.json<InitResponse>({
+    // Check if current user is a moderator
+    let isModerator = false;
+    if (username) {
+      try {
+        const subName = context.subredditName;
+        if (subName) {
+          const moderators = [];
+          for await (const m of reddit.getModerators({ subredditName: subName })) {
+            moderators.push(m.username);
+            if (moderators.length >= 100) break;
+          }
+          isModerator = moderators.includes(username);
+        }
+      } catch (err) {
+        console.warn('Error checking moderator status:', err);
+      }
+    }
+
+    return c.json({
       type: 'init',
       postId: postId,
       count: count ? parseInt(count) : 0,
       username: username ?? 'anonymous',
+      isModerator,
     });
   } catch (error) {
     console.error(`API Init Error for post ${postId}:`, error);
@@ -94,6 +111,7 @@ api.post('/decrement', async (c) => {
   });
 });
 
+
 api.get('/moderators', async (c) => {
   try {
     const subName = context.subredditName;
@@ -118,12 +136,19 @@ api.get('/moderators', async (c) => {
 });
 
 /**
- * GET /api/settings
+ * GET /api/quiz-settings
  * Fetch current quiz settings
  */
-api.get('/settings', async (c) => {
+api.get('/quiz-settings', async (c) => {
   try {
     const settingsJson = await redis.get('quiz:settings');
+    const DEFAULT_QUIZ_SETTINGS = {
+      difficulty: 'medium' as const,
+      passing_score: 70,
+      questions_count: 5,
+      pass_flair_text: 'Verified member',
+    };
+    
     const settings = settingsJson
       ? {
           ...DEFAULT_QUIZ_SETTINGS,
@@ -131,7 +156,7 @@ api.get('/settings', async (c) => {
         }
       : DEFAULT_QUIZ_SETTINGS;
 
-    return c.json<SettingsResponse>(settings);
+    return c.json(settings);
   } catch (error) {
     console.error('Error fetching quiz settings:', error);
     return c.json({ error: 'Failed to fetch settings' }, 500);
@@ -139,10 +164,10 @@ api.get('/settings', async (c) => {
 });
 
 /**
- * POST /api/settings
- * Update quiz settings (moderator-only in production)
+ * POST /api/quiz-settings
+ * Update quiz settings (moderator-only)
  */
-api.post('/settings', async (c) => {
+api.post('/quiz-settings', async (c) => {
   try {
     const newSettings = (await c.req.json()) as Partial<QuizSettings>;
 
@@ -164,6 +189,13 @@ api.post('/settings', async (c) => {
     }
 
     // Fetch current settings
+    const DEFAULT_QUIZ_SETTINGS = {
+      difficulty: 'medium' as const,
+      passing_score: 70,
+      questions_count: 5,
+      pass_flair_text: 'Verified member',
+    };
+    
     const settingsJson = await redis.get('quiz:settings');
     const settings: QuizSettings = settingsJson
       ? {
@@ -181,7 +213,7 @@ api.post('/settings', async (c) => {
     // Store updated settings
     await redis.set('quiz:settings', JSON.stringify(updatedSettings));
 
-    return c.json<SettingsResponse>(updatedSettings);
+    return c.json(updatedSettings);
   } catch (error) {
     console.error('Error updating quiz settings:', error);
     return c.json({ error: 'Failed to update settings' }, 500);

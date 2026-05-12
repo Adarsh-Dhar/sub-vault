@@ -77,11 +77,31 @@ quiz.post('/generate', async (c) => {
     const quizSettings = await getQuizSettings();
     const rules = await getSubredditRulesText();
 
-    // Generate questions using Gemini
+    // 1. Fetch user's recent comments for AI Context
+    let userCommentsText = '';
+    try {
+      const recentComments: string[] = [];
+      const commentsListing = reddit.getCommentsByUser({ 
+        username, 
+        limit: 10, 
+        sort: 'new' 
+      });
+      
+      for await (const comment of commentsListing) {
+        recentComments.push(`- ${comment.body}`);
+        if (recentComments.length >= 10) break;
+      }
+      userCommentsText = recentComments.join('\n');
+    } catch (err) {
+      console.warn(`[Quiz] Could not fetch comments for ${username}`, err);
+    }
+
+    // 2. Generate questions passing the new context
     const questions = await generateQuiz(
       rules,
       quizSettings.difficulty,
-      quizSettings.questions_count
+      quizSettings.questions_count,
+      userCommentsText
     );
 
     if (questions.length === 0) {

@@ -4,7 +4,7 @@
 
 import { Hono } from 'hono';
 import type { TriggerResponse } from '@devvit/web/shared';
-import { redis } from '@devvit/web/server';
+import { redis, reddit } from '@devvit/web/server';
 import { generateQuiz } from '../services/gemini';
 import { getQuizSettings, getSubredditRulesText } from '../services/quiz-data';
 import type { QuizState } from '../../shared/quiz-types';
@@ -31,11 +31,31 @@ triggers.post('/on-subscribe', async (c) => {
     const quizSettings = await getQuizSettings();
     const rules = await getSubredditRulesText();
 
-    // Generate quiz questions
+    // 1. Fetch user's recent comments for AI Context
+    let userCommentsText = '';
+    try {
+      const recentComments: string[] = [];
+      const commentsListing = reddit.getCommentsByUser({ 
+        username, 
+        limit: 10, 
+        sort: 'new' 
+      });
+      
+      for await (const comment of commentsListing) {
+        recentComments.push(`- ${comment.body}`);
+        if (recentComments.length >= 10) break;
+      }
+      userCommentsText = recentComments.join('\n');
+    } catch (err) {
+      console.warn(`[Quiz] Could not fetch comments for ${username}`, err);
+    }
+
+    // 2. Generate quiz questions with user context
     const questions = await generateQuiz(
       rules,
       quizSettings.difficulty,
-      quizSettings.questions_count
+      quizSettings.questions_count,
+      userCommentsText
     );
 
     if (questions.length === 0) {

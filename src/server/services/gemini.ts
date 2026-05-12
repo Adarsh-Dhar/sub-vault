@@ -74,7 +74,8 @@ function normalizeQuestions(content: string, questionsCount: number): QuizQuesti
 export async function generateQuiz(
   rules: string,
   difficulty: QuizDifficulty,
-  questionsCount: number
+  questionsCount: number,
+  userComments?: string
 ): Promise<QuizQuestion[]> {
   const apiKey = process.env.GEMINI_API_KEY;
 
@@ -86,27 +87,74 @@ export async function generateQuiz(
   const model = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
   const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
 
-  const prompt = `Given the following subreddit rules, generate exactly ${questionsCount} ${difficulty}-level multiple-choice questions that test users' understanding of these rules. Each question should test understanding of one or more rules.
+  let prompt = `You are creating a challenging subreddit rules quiz. Generate exactly ${questionsCount} ${difficulty}-level multiple-choice questions that test ACTUAL understanding of the rules, not just pattern matching.
 
 Subreddit Rules:
 ${rules}
 
+IMPORTANT INSTRUCTIONS:
+1. **Randomize Correct Answers**: The correct answer must NOT always be in the same position. Vary correct_answer_index across all questions (mix of 0, 1, 2, 3).
+
+2. **Make Questions Non-Obvious**: 
+   - Do NOT ask straightforward questions like "What does rule X say?"
+   - Instead, present realistic scenarios and edge cases
+   - Questions should require users to THINK about rule implications, not just memorize them
+   - For example: Instead of "Is spam allowed?" ask "A user posts promotional content disguised as helpful advice. Does this violate the rules?"
+
+3. **Require Prior Research**:
+   - Assume users have read the rules carefully
+   - Test nuanced understanding and edge cases
+   - Include common violations that aren't immediately obvious
+   - Make trap answers that seem plausible to people who didn't study
+
+4. **Difficulty Levels**:
+   - easy: Basic rule comprehension with one clear violation
+   - medium: Situational judgement, multiple rule implications
+   - hard: Complex edge cases, rule combinations, intent-based violations
+
+5. **Question Design**:
+   - Each option should be plausible (users should have to think)
+   - Avoid obviously wrong answers
+   - The correct answer should require understanding WHY, not just WHAT
+`;
+
+  // Inject User context if available
+  if (userComments) {
+    prompt += `
+6. **User-Specific Context**:
+Here are some of the user's recent comments on Reddit:
+${userComments}
+
+Analyze these comments and tailor questions to address ANY rules the user might be at risk of violating based on their comment history. For example:
+- If they use harsh language, test their understanding of civility/conduct rules
+- If they post frequently, test spam/self-promotion rules
+- If they engage in arguments, test conflict resolution expectations
+- Emphasize the specific rule violations patterns you see in their history
+
+Make 60% of questions target their potential risk areas, and 40% general rules.
+`;
+  }
+
+  prompt += `
 Return ONLY a valid JSON array with this exact structure (no markdown, no explanation, just JSON):
 [
   {
     "id": 1,
-    "question_text": "Question text here?",
-    "options": ["Option A", "Option B", "Option C", "Option D"],
-    "correct_answer_index": 0,
-    "explanation": "Why this is correct"
+    "question_text": "Realistic scenario or edge case question?",
+    "options": ["Plausible answer A", "Plausible answer B", "Plausible answer C", "Plausible answer D"],
+    "correct_answer_index": 2,
+    "explanation": "Explanation of why this is correct and what rule(s) apply"
   }
 ]
 
-Make sure:
-- Each question has exactly 4 options
-- correct_answer_index is 0-3
-- Questions are appropriate difficulty level (easy=basic understanding, medium=nuanced rules, hard=edge cases)
-- Explanations are concise`;
+CRITICAL REQUIREMENTS:
+- Exactly ${questionsCount} questions
+- RANDOMIZE correct_answer_index: Do NOT put it at index 0 for every question. Mix indices 0, 1, 2, 3 throughout
+- Each question has exactly 4 plausible options
+- All options should sound reasonable to someone who didn't study carefully
+- Explanations reference specific rules and their intent
+- Questions test ${difficulty === 'easy' ? 'basic comprehension' : difficulty === 'medium' ? 'nuanced judgment' : 'complex edge cases'}
+- NO obvious or trivial questions`;
 
   const requestBody = {
     contents: [

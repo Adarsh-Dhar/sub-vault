@@ -21,6 +21,8 @@ function getCurrentSubredditName(): string {
 
 export async function getQuizSettings(): Promise<QuizSettings> {
   try {
+    // Read settings from Devvit app configuration (devvit.json)
+    // Settings can be modified via moderator UI
     const settingsJson = await redis.get('quiz:settings');
 
     if (!settingsJson) {
