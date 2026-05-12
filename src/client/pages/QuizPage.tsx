@@ -11,11 +11,13 @@ import { ResultBanner } from '../components/ResultBanner';
 import { Button } from '../components/ui/button';
 import { Card, CardContent } from '../components/ui/card';
 import { Progress } from '../components/ui/progress';
+import { useInit } from '../contexts/init-context';
 import { useToast } from '../hooks/use-toast';
 
 export default function QuizPage() {
   const navigate = useNavigate();
   const { toast } = useToast();
+  const { init, loading: initLoading, error: initError } = useInit();
 
   const [quizState, setQuizState] = useState<QuizState | null>(null);
   const [answers, setAnswers] = useState<Record<number, number>>({});
@@ -25,10 +27,13 @@ export default function QuizPage() {
 
   // Fetch quiz state on mount
   useEffect(() => {
+    if (initLoading || !init) {
+      return;
+    }
+
     const fetchQuiz = async () => {
       try {
-        const username = 'current_user'; // In real app, get from context
-        const response = await fetch(`/api/quiz/${username}`);
+        const response = await fetch(`/api/quiz/${init.username}`);
 
         if (response.ok) {
           const data = await response.json() as QuizState;
@@ -61,7 +66,7 @@ export default function QuizPage() {
     };
 
     void fetchQuiz();
-  }, [navigate, toast]);
+  }, [init, initLoading, navigate, toast]);
 
   const handleAnswer = (questionId: number, optionIndex: number) => {
     setAnswers((prev) => ({
@@ -130,6 +135,17 @@ export default function QuizPage() {
   };
 
   if (loading) {
+    if (initLoading) {
+      return (
+        <div className="flex min-h-screen items-center justify-center bg-background">
+          <div className="text-center">
+            <Loader2 className="mx-auto h-8 w-8 animate-spin text-primary" />
+            <p className="mt-4 text-muted-foreground">Loading session...</p>
+          </div>
+        </div>
+      );
+    }
+
     return (
       <div className="flex min-h-screen items-center justify-center bg-background">
         <div className="text-center">
@@ -145,6 +161,9 @@ export default function QuizPage() {
       <div className="flex min-h-screen items-center justify-center bg-background">
         <Card className="w-full max-w-md">
           <CardContent className="pt-6">
+            {initError && (
+              <p className="mb-4 text-center text-sm text-muted-foreground">{initError}</p>
+            )}
             <p className="text-center text-destructive">
               Error loading quiz. Please try again.
             </p>

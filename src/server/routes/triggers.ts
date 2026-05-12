@@ -6,15 +6,11 @@ import { Hono } from 'hono';
 import type { TriggerResponse } from '@devvit/web/shared';
 import { redis } from '@devvit/web/server';
 import { generateQuiz } from '../services/gemini';
-import type { QuizState, QuizSettings } from '../../shared/quiz-types';
+import { getQuizSettings, getSubredditRulesText } from '../services/quiz-data';
+import type { QuizState } from '../../shared/quiz-types';
+import type { OnModActionRequest } from '@devvit/web/shared';
 
 export const triggers = new Hono();
-
-const DEFAULT_SETTINGS: QuizSettings = {
-  difficulty: 'medium',
-  passing_score: 70,
-  questions_count: 5,
-};
 
 /**
  * POST /internal/triggers/on-subscribe
@@ -32,21 +28,8 @@ triggers.post('/on-subscribe', async (c) => {
 
     console.log(`[Quiz] OnSubscribe triggered for user: ${username}`);
 
-    // Fetch quiz settings from Redis
-    let quizSettings = DEFAULT_SETTINGS;
-    try {
-      const settingsJson = await redis.get('quiz:settings');
-      if (settingsJson) {
-        quizSettings = JSON.parse(settingsJson);
-      }
-    } catch (error) {
-      console.error('[Quiz] Error reading quiz settings:', error);
-    }
-
-    // Fetch subreddit rules
-    const rules = 'Default community guidelines apply';
-    // Try to fetch subreddit metadata if available
-    // Otherwise use default
+    const quizSettings = await getQuizSettings();
+    const rules = await getSubredditRulesText();
 
     // Generate quiz questions
     const questions = await generateQuiz(
@@ -79,6 +62,23 @@ triggers.post('/on-subscribe', async (c) => {
   } catch (error) {
     console.error('[Quiz] Error in OnSubscribe handler:', error);
     // Return 200 anyway - trigger handlers should not fail
+    return c.json<TriggerResponse>({}, 200);
+  }
+});
+
+/**
+ * POST /internal/triggers/on-mod-action
+ * Handles moderator actions from the Devvit trigger pipeline.
+ */
+triggers.post('/on-mod-action', async (c) => {
+  try {
+    const input = (await c.req.json()) as OnModActionRequest;
+
+    console.log('[Quiz] OnModAction triggered', input);
+
+    return c.json<TriggerResponse>({}, 200);
+  } catch (error) {
+    console.error('[Quiz] Error in OnModAction handler:', error);
     return c.json<TriggerResponse>({}, 200);
   }
 });

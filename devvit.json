@@ -1,6 +1,10 @@
 {
   "name": "sub3-vault",
   "permissions": {
+    "http": {
+      "enable": true,
+      "domains": ["generativelanguage.googleapis.com"]
+    },
     "reddit": true
   },
   "post": {
@@ -41,7 +45,7 @@
     "exampleForm": "/internal/form/example-submit"
   },
   "triggers": {
-    "onSubscribe": "/internal/triggers/on-subscribe"
+    "onModAction": "/internal/triggers/on-mod-action"
   },
   "scripts": {
     "dev": "vite build --watch",

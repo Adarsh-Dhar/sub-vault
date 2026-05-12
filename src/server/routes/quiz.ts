@@ -5,20 +5,18 @@
 import { Hono } from 'hono';
 import { reddit, redis } from '@devvit/web/server';
 import { generateQuiz } from '../services/gemini';
+import {
+  assignPassFlair,
+  getQuizSettings,
+  getSubredditRulesText,
+} from '../services/quiz-data';
 import type {
   QuizState,
   QuizSubmission,
   QuizResult,
-  QuizSettings,
 } from '../../shared/quiz-types';
 
 export const quiz = new Hono();
-
-const DEFAULT_SETTINGS: QuizSettings = {
-  difficulty: 'medium',
-  passing_score: 70,
-  questions_count: 5,
-};
 
 /**
  * GET /api/quiz/:username
@@ -76,21 +74,8 @@ quiz.post('/generate', async (c) => {
     // Note: getSubreddit may not be available in Devvit SDK
     // Using context.subredditName directly
 
-    // Fetch quiz settings from Redis or use defaults
-    let quizSettings = DEFAULT_SETTINGS;
-    try {
-      const settingsJson = await redis.get('quiz:settings');
-      if (settingsJson) {
-        quizSettings = JSON.parse(settingsJson);
-      }
-    } catch (error) {
-      console.error('Error reading quiz settings from Redis:', error);
-    }
-
-    // Get subreddit rules as string
-    const rules = 'Default community guidelines apply';
-    // Try to fetch subreddit metadata if available
-    // Otherwise use default
+    const quizSettings = await getQuizSettings();
+    const rules = await getSubredditRulesText();
 
     // Generate questions using Gemini
     const questions = await generateQuiz(
@@ -185,17 +170,8 @@ quiz.post('/submit', async (c) => {
       (correctCount / quizState.questions.length) * 100
     );
 
-    // Get settings to determine passing score
-    let passingScore = DEFAULT_SETTINGS.passing_score;
-    try {
-      const settingsJson = await redis.get('quiz:settings');
-      if (settingsJson) {
-        const settings: QuizSettings = JSON.parse(settingsJson);
-        passingScore = settings.passing_score;
-      }
-    } catch (error) {
-      console.error('Error reading passing score:', error);
-    }
+    const quizSettings = await getQuizSettings();
+    const passingScore = quizSettings.passing_score;
 
     const passed = score >= passingScore;
 
@@ -222,6 +198,12 @@ quiz.post('/submit', async (c) => {
     // Store pass/fail status
     if (passed) {
       await redis.set(`quiz:passed:${username}`, 'true');
+
+      try {
+        await assignPassFlair(username, quizSettings.pass_flair_text);
+      } catch (error) {
+        console.warn('Failed to assign pass flair:', error);
+      }
     }
 
     // Increment attempt count

@@ -8,6 +8,7 @@ import { Loader2 } from 'lucide-react';
 import type { QuizSettings } from '../../shared/quiz-types';
 import { Button } from '../components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
+import { useInit } from '../contexts/init-context';
 import { useToast } from '../hooks/use-toast';
 
 export default function WelcomePage() {
@@ -15,6 +16,7 @@ export default function WelcomePage() {
   const { toast } = useToast();
   const [loading, setLoading] = useState(false);
   const [settings, setSettings] = useState<QuizSettings | null>(null);
+  const { init, loading: initLoading, error: initError } = useInit();
 
   // Fetch settings on component mount
   useEffect(() => {
@@ -64,9 +66,10 @@ export default function WelcomePage() {
 
   const difficultyLabel = settings?.difficulty || 'Medium';
   const questionsCount = settings?.questions_count || 5;
+  const username = init?.username && init.username !== 'anonymous' ? init.username : null;
 
   return (
-    <div className="flex min-h-screen flex-col items-center justify-center bg-gradient-to-br from-primary/5 to-primary/10 px-4 py-8">
+    <div className="flex min-h-screen flex-col items-center justify-center bg-linear-to-br from-primary/5 to-primary/10 px-4 py-8">
       <div className="w-full max-w-md space-y-6">
         {/* Welcome Card */}
         <Card>
@@ -80,9 +83,18 @@ export default function WelcomePage() {
             <p className="text-lg text-muted-foreground">
               Let's test your knowledge of our community guidelines
             </p>
+            {username && (
+              <p className="text-sm font-medium text-foreground">Signed in as {username}</p>
+            )}
           </CardHeader>
 
           <CardContent className="space-y-6">
+            {initError && (
+              <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-4 text-sm text-destructive">
+                {initError}
+              </div>
+            )}
+
             {/* Quiz Info Card */}
             <div className="rounded-lg border border-primary/20 bg-primary/5 p-4">
               <h3 className="font-semibold text-foreground">Quiz Details</h3>
@@ -110,12 +122,12 @@ export default function WelcomePage() {
             {/* Start Button */}
             <Button
               onClick={() => void handleStartQuiz()}
-              disabled={loading}
+              disabled={loading || initLoading || !username}
               size="lg"
               className="w-full"
             >
               {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              {loading ? 'Starting Quiz...' : 'Start Quiz'}
+              {loading ? 'Starting Quiz...' : initLoading ? 'Loading Session...' : 'Start Quiz'}
             </Button>
 
             {/* Info */}

@@ -5,6 +5,7 @@ import type {
   IncrementResponse,
   InitResponse,
 } from '../../shared/api';
+import { DEFAULT_QUIZ_SETTINGS } from '../services/quiz-data';
 import type { QuizSettings, SettingsResponse } from '../../shared/quiz-types';
 
 type ErrorResponse = {
@@ -122,16 +123,13 @@ api.get('/moderators', async (c) => {
  */
 api.get('/settings', async (c) => {
   try {
-    const defaultSettings: QuizSettings = {
-      difficulty: 'medium',
-      passing_score: 70,
-      questions_count: 5,
-    };
-
     const settingsJson = await redis.get('quiz:settings');
     const settings = settingsJson
-      ? JSON.parse(settingsJson)
-      : defaultSettings;
+      ? {
+          ...DEFAULT_QUIZ_SETTINGS,
+          ...(JSON.parse(settingsJson) as Partial<QuizSettings>),
+        }
+      : DEFAULT_QUIZ_SETTINGS;
 
     return c.json<SettingsResponse>(settings);
   } catch (error) {
@@ -166,16 +164,13 @@ api.post('/settings', async (c) => {
     }
 
     // Fetch current settings
-    let settings: QuizSettings = {
-      difficulty: 'medium',
-      passing_score: 70,
-      questions_count: 5,
-    };
-
     const settingsJson = await redis.get('quiz:settings');
-    if (settingsJson) {
-      settings = JSON.parse(settingsJson);
-    }
+    const settings: QuizSettings = settingsJson
+      ? {
+          ...DEFAULT_QUIZ_SETTINGS,
+          ...(JSON.parse(settingsJson) as Partial<QuizSettings>),
+        }
+      : DEFAULT_QUIZ_SETTINGS;
 
     // Merge with new settings
     const updatedSettings: QuizSettings = {

@@ -37,6 +37,7 @@ export type QuizSettings = {
   difficulty: QuizDifficulty;
   passing_score: number; // 0-100
   questions_count: number;
+  pass_flair_text: string;
 };
 
 export type SettingsResponse = QuizSettings;
