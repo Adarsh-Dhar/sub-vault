@@ -41,8 +41,7 @@
     "exampleForm": "/internal/form/example-submit"
   },
   "triggers": {
-    "onAppInstall": "/internal/triggers/on-app-install",
-    "onModAction": "/internal/triggers/on-mod-action"
+    "onSubscribe": "/internal/triggers/on-subscribe"
   },
   "scripts": {
     "dev": "vite build --watch",

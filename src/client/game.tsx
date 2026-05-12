@@ -3,11 +3,11 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
 
-// Import your pages
-import HomePage from './pages/HomePage';
-import SnapshotsPage from './pages/SnapshotPage';
+// Import pages
+import WelcomePage from './pages/WelcomePage';
+import QuizPage from './pages/QuizPage';
 
-// Import your global providers and UI components
+// Import global providers and UI components
 import { ThemeProvider } from './contexts/theme-context';
 import { Toaster } from './components/ui/toaster';
 
@@ -17,11 +17,11 @@ export const App = () => {
       {/* BrowserRouter works perfectly inside the Devvit webview to swap out pages */}
       <BrowserRouter basename="/game.html">
         <Routes>
-          <Route path="/" element={<HomePage />} />
-          <Route path="/snapshots" element={<SnapshotsPage />} />
+          <Route path="/" element={<WelcomePage />} />
+          <Route path="/quiz" element={<QuizPage />} />
         </Routes>
       </BrowserRouter>
-      
+
       {/* Global toast notifications provider */}
       <Toaster />
     </ThemeProvider>

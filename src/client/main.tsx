@@ -1,15 +1,18 @@
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
-import SnapshotsPage from './pages/SnapshotPage';
-import HomePage from './pages/HomePage';
+import WelcomePage from './pages/WelcomePage';
+import QuizPage from './pages/QuizPage';
+import { ThemeProvider } from './contexts/theme-context';
 
 function App() {
   return (
-    <BrowserRouter basename="/game.html">
-      <Routes>
-        <Route path="/snapshots" element={<SnapshotsPage />} />
-        <Route path="/" element={<HomePage />} />
-      </Routes>
-    </BrowserRouter>
+    <ThemeProvider>
+      <BrowserRouter basename="/game.html">
+        <Routes>
+          <Route path="/" element={<WelcomePage />} />
+          <Route path="/quiz" element={<QuizPage />} />
+        </Routes>
+      </BrowserRouter>
+    </ThemeProvider>
   );
 }
 

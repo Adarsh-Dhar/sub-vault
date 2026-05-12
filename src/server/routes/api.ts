@@ -5,6 +5,7 @@ import type {
   IncrementResponse,
   InitResponse,
 } from '../../shared/api';
+import type { QuizSettings, SettingsResponse } from '../../shared/quiz-types';
 
 type ErrorResponse = {
   status: 'error';
@@ -112,5 +113,82 @@ api.get('/moderators', async (c) => {
   } catch (err) {
     console.error('[SubVault] Failed to fetch moderators:', err);
     return c.json({ error: 'Failed to fetch moderators' }, 500);
+  }
+});
+
+/**
+ * GET /api/settings
+ * Fetch current quiz settings
+ */
+api.get('/settings', async (c) => {
+  try {
+    const defaultSettings: QuizSettings = {
+      difficulty: 'medium',
+      passing_score: 70,
+      questions_count: 5,
+    };
+
+    const settingsJson = await redis.get('quiz:settings');
+    const settings = settingsJson
+      ? JSON.parse(settingsJson)
+      : defaultSettings;
+
+    return c.json<SettingsResponse>(settings);
+  } catch (error) {
+    console.error('Error fetching quiz settings:', error);
+    return c.json({ error: 'Failed to fetch settings' }, 500);
+  }
+});
+
+/**
+ * POST /api/settings
+ * Update quiz settings (moderator-only in production)
+ */
+api.post('/settings', async (c) => {
+  try {
+    const newSettings = (await c.req.json()) as Partial<QuizSettings>;
+
+    // Validate input
+    if (newSettings.difficulty && !['easy', 'medium', 'hard'].includes(newSettings.difficulty)) {
+      return c.json({ error: 'Invalid difficulty level' }, 400);
+    }
+
+    if (newSettings.passing_score !== undefined) {
+      if (typeof newSettings.passing_score !== 'number' || newSettings.passing_score < 0 || newSettings.passing_score > 100) {
+        return c.json({ error: 'Passing score must be between 0 and 100' }, 400);
+      }
+    }
+
+    if (newSettings.questions_count !== undefined) {
+      if (typeof newSettings.questions_count !== 'number' || newSettings.questions_count < 1 || newSettings.questions_count > 50) {
+        return c.json({ error: 'Questions count must be between 1 and 50' }, 400);
+      }
+    }
+
+    // Fetch current settings
+    let settings: QuizSettings = {
+      difficulty: 'medium',
+      passing_score: 70,
+      questions_count: 5,
+    };
+
+    const settingsJson = await redis.get('quiz:settings');
+    if (settingsJson) {
+      settings = JSON.parse(settingsJson);
+    }
+
+    // Merge with new settings
+    const updatedSettings: QuizSettings = {
+      ...settings,
+      ...newSettings,
+    };
+
+    // Store updated settings
+    await redis.set('quiz:settings', JSON.stringify(updatedSettings));
+
+    return c.json<SettingsResponse>(updatedSettings);
+  } catch (error) {
+    console.error('Error updating quiz settings:', error);
+    return c.json({ error: 'Failed to update settings' }, 500);
   }
 });
