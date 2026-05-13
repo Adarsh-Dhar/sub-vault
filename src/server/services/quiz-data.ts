@@ -177,8 +177,7 @@ export async function checkVeteranStatus(username: string): Promise<boolean> {
       return false;
     }
 
-    // Use getUser instead of getUserById to fetch by username
-    const user = await (reddit as any).getUser(username);
+    const user = await reddit.getUserByUsername(username);
     if (!user) {
       return false;
     }
