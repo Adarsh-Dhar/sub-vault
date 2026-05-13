@@ -4,8 +4,8 @@
 
 import { Hono } from 'hono';
 import type { TriggerResponse } from '@devvit/web/shared';
-import { reddit, redis } from '@devvit/web/server';
-import { generateQuiz } from '../services/gemini';
+import { context, reddit, redis } from '@devvit/web/server';
+import { generateQuiz, checkDangerousContent } from '../services/gemini';
 import { getQuizSettings, getSubredditRulesText } from '../services/quiz-data';
 import type { QuizState } from '../../shared/quiz-types';
 import type { OnModActionRequest } from '@devvit/web/shared';
@@ -154,7 +154,42 @@ triggers.post('/on-post-submit', async (c) => {
     const hasPassed = await redis.get(`quiz:passed:${authorId}`);
 
     if (hasPassed === 'true') {
-      // All good — user is verified, let the post through
+      // User passed the quiz — still run an AI "vibe check" for dangerous content
+      try {
+        const post = await reddit.getPostById(postId);
+        const vibeCheck = await checkDangerousContent(post.title, (post as any).selftext || '');
+
+        if (vibeCheck.isDangerous) {
+          console.log(`[Quiz] Dangerous post detected from ${authorName}: ${vibeCheck.reason}`);
+
+          const subredditName = context.subredditName;
+          if (subredditName) {
+            try {
+              await reddit.setPostFlair({
+                subredditName,
+                postId,
+                text: 'Dangerous',
+                backgroundColor: '#000000',
+              });
+            } catch (flairErr) {
+              console.warn(`[Quiz] Could not set Dangerous flair on ${postId}:`, flairErr);
+            }
+          }
+
+          await post.remove(true);
+
+          const comment = await post.addComment({
+            text: `This post was automatically removed by AI moderation because it was flagged as dangerous/violating.\n\n**Reason:** ${vibeCheck.reason ?? 'Flagged by AI'}`
+          });
+          await comment.lock();
+
+          return c.json<TriggerResponse>({}, 200);
+        }
+      } catch (err) {
+        console.error('[Quiz] Failed to run dangerous content check:', err);
+      }
+
+      // If it's not dangerous, let it through normally
       return c.json<TriggerResponse>({}, 200);
     }
 
@@ -163,6 +198,25 @@ triggers.post('/on-post-submit', async (c) => {
     // Remove the post
     try {
       const post = await reddit.getPostById(postId);
+
+      // 1. Tag the post for moderation logs (non-fatal)
+      const subredditName = context.subredditName;
+      if (subredditName) {
+        try {
+          await reddit.setPostFlair({
+            subredditName,
+            postId,
+            text: 'Pending Quiz',
+            backgroundColor: '#FF4500',
+          });
+          console.log(`[Quiz] Post ${postId} tagged with "Pending Quiz" flair`);
+        } catch (flairError) {
+          // Flair failure is non-fatal — still remove the post
+          console.warn(`[Quiz] Could not set flair on post ${postId}:`, flairError);
+        }
+      }
+
+      // 2. Instantly remove the post (spam classification keeps it off all feeds)
       await post.remove(true); // true = treat as spam removal
 
       // Leave a comment explaining why, with a link to the quiz

@@ -224,3 +224,49 @@ CRITICAL REQUIREMENTS:
     return [];
   }
 }
+
+export async function checkDangerousContent(
+  title: string,
+  body: string
+): Promise<{ isDangerous: boolean; reason?: string }>
+{
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) return { isDangerous: false };
+
+  const model = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+
+  const prompt = `You are an AI subreddit moderator. Your job is to check if an incoming post is "Dangerous" (e.g., spam, phishing links, illegal content, extreme hostility, or severe rule-breaking).\n  \nTitle: "${title}"\nBody: "${body}"\n\nReturn ONLY a valid JSON object:\n{\n  "is_dangerous": true/false,\n  "reason": "Short explanation of why it is dangerous (or null)"\n}`;
+
+  try {
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: { temperature: 0.1, responseMimeType: 'application/json' },
+      }),
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      console.error('Gemini checkDangerousContent API error:', response.status, errText);
+      return { isDangerous: false };
+    }
+
+    const data = await response.json();
+    const content = data.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (content) {
+      try {
+        const result = JSON.parse(content);
+        return { isDangerous: !!result.is_dangerous, reason: result.reason };
+      } catch (parseErr) {
+        console.error('Failed to parse Gemini dangerous content response JSON:', parseErr);
+      }
+    }
+  } catch (error) {
+    console.error('Error checking dangerous content:', error);
+  }
+
+  return { isDangerous: false };
+}
