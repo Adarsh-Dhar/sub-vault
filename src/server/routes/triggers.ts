@@ -40,11 +40,46 @@ triggers.post('/on-subscribe', async (c) => {
     const quizSettings = await getQuizSettings();
     const rules = await getSubredditRulesText();
 
-    // Generate quiz questions
+    // 1. Fetch User Comments
+    let userCommentsText = '';
+    try {
+      const recentComments: string[] = [];
+      const commentsIterator = reddit.getCommentsByUser({ username, limit: 10, sort: 'new' });
+      for await (const comment of commentsIterator) {
+        recentComments.push(`- ${comment.body}`);
+      }
+      userCommentsText = recentComments.join('\n');
+    } catch (err) {
+      console.warn(`[Quiz] Could not fetch comments for ${username}`);
+    }
+
+    // 2. Fetch Subreddit Context (Top Posts & Ban Reasons)
+    const topPosts: string[] = [];
+    const banReasons: string[] = [];
+    try {
+      const subreddit = await reddit.getCurrentSubreddit();
+      const postsIter = subreddit.getTopPosts({ timeframe: 'month', limit: 5 });
+      for await (const post of postsIter) {
+        topPosts.push(post.title);
+      }
+
+      const bansIter = subreddit.getBannedUsers({ limit: 10 });
+      for await (const ban of bansIter) {
+        // Ban object may contain moderation details if available
+        const banNote = ((ban as unknown) as Record<string, unknown>).modNote as string | undefined;
+        if (banNote) banReasons.push(banNote);
+      }
+    } catch (err) {
+      console.warn(`[Quiz] Could not fetch sub context. App might lack permissions.`);
+    }
+
+    // 3. Generate quiz questions with context
     const questions = await generateQuiz(
       rules,
       quizSettings.difficulty,
-      quizSettings.questions_count
+      quizSettings.questions_count,
+      userCommentsText,
+      { topPosts, banReasons }
     );
 
     if (questions.length === 0) {

@@ -75,7 +75,8 @@ export async function generateQuiz(
   rules: string,
   difficulty: QuizDifficulty,
   questionsCount: number,
-  userComments?: string
+  userComments?: string,
+  subredditContext?: { topPosts: string[]; banReasons: string[] }
 ): Promise<QuizQuestion[]> {
   const apiKey = process.env.GEMINI_API_KEY;
 
@@ -118,10 +119,24 @@ IMPORTANT INSTRUCTIONS:
    - The correct answer should require understanding WHY, not just WHAT
 `;
 
+  // Inject Subreddit Context
+  if (subredditContext && (subredditContext.topPosts.length > 0 || subredditContext.banReasons.length > 0)) {
+    prompt += `
+6. **Subreddit Context for AI (DO NOT ASK TRIVIA ABOUT THIS)**:
+- Examples of Highly Rated Posts (What the community likes):
+${subredditContext.topPosts.map((p) => `  * "${p}"`).join('\n')}
+
+- Recent Ban Reasons (Why moderators have banned people recently):
+${subredditContext.banReasons.map((r) => `  * "${r}"`).join('\n')}
+
+CRITICAL INSTRUCTION: Use the "Ban Reasons" to create realistic, hypothetical scenario questions (e.g., "If you see a post doing [Ban Reason], what should you do?"). Do NOT ask trivia like "Who was banned?". The user is new.
+`;
+  }
+
   // Inject User context if available
   if (userComments) {
     prompt += `
-6. **User-Specific Context**:
+7. **User-Specific Context**:
 Here are some of the user's recent comments on Reddit:
 ${userComments}
 
