@@ -45,12 +45,17 @@ Devvit.addTrigger({
             console.warn(`[Quiz] Could not set Dangerous flair on ${post.id}:`, flairError);
           }
 
-          await reddit.remove(post.id, true);
+          try {
+            await post.remove(true);
 
-          const comment = await post.addComment({
-            text: `This post was automatically removed by AI moderation because it was flagged as dangerous/violating.\n\n**Reason:** ${vibeCheck.reason ?? 'Flagged by AI'}`,
-          });
-          await comment.lock();
+            const comment = await post.addComment({
+              text: `This post was automatically removed by AI moderation because it was flagged as dangerous/violating.\n\n**Reason:** ${vibeCheck.reason ?? 'Flagged by AI'}`,
+            });
+            await comment.lock();
+          } catch (removeError) {
+            console.error(`[Quiz] Failed to remove or comment on dangerous post ${post.id}:`, removeError);
+            throw removeError;
+          }
         }
 
         return;
@@ -69,18 +74,24 @@ Devvit.addTrigger({
         console.warn(`[Quiz] Could not set Pending Quiz flair on ${post.id}:`, flairError);
       }
 
-      await reddit.remove(post.id, true);
+      try {
+        await post.remove(true);
 
-      const quizPostId = await redis.get('quiz:active_post_id');
+        const quizPostId = await redis.get('quiz:active_post_id');
       const quizLink = quizPostId ? `https://reddit.com/post/${quizPostId}` : null;
       const commentText = quizLink
         ? `Hi u/${author.name}, your post was automatically removed because you haven't passed our community rules quiz yet.\n\n👉 **[Click here to take the quiz](${quizLink})**`
         : `Hi u/${author.name}, your post was removed because you haven't completed our onboarding quiz yet.`;
 
-      const comment = await post.addComment({ text: commentText });
-      await comment.lock();
+        const comment = await post.addComment({ text: commentText });
+        await comment.lock();
+      } catch (removeError) {
+        console.error(`[Quiz] Failed to remove or comment on pending-quiz post ${post.id}:`, removeError);
+        throw removeError;
+      }
     } catch (error) {
       console.error('[Quiz] NATIVE PostSubmit error:', error);
+      throw error;
     }
   },
 });
