@@ -177,7 +177,8 @@ export async function checkVeteranStatus(username: string): Promise<boolean> {
       return false;
     }
 
-    const user = await (reddit as any).getUserById(username);
+    // Use getUser instead of getUserById to fetch by username
+    const user = await (reddit as any).getUser(username);
     if (!user) {
       return false;
     }
@@ -194,6 +195,7 @@ export async function checkVeteranStatus(username: string): Promise<boolean> {
 
     return accountAgeCheck || karmaCheck;
   } catch (error) {
+    // User not found or API error — treat as non-veteran
     console.warn(`[Quiz] Error checking veteran status for ${username}:`, error);
     return false;
   }

@@ -1,16 +1,10 @@
-/**
- * QuizPage - Main quiz form where users answer questions
- */
-
 import { useEffect, useState, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { Loader2 } from 'lucide-react';
 import type { QuizState, QuizResult } from '../../shared/quiz-types';
-import { QuizQuestion } from '../components/QuizQuestion';
 import { ResultBanner } from '../components/ResultBanner';
 import { Button } from '../components/ui/button';
 import { Card, CardContent } from '../components/ui/card';
-import { Progress } from '../components/ui/progress';
 import { useInit } from '../contexts/init-context';
 import { useToast } from '../hooks/use-toast';
 import { debounce } from '../lib/utils-devvit';
@@ -341,84 +335,111 @@ export default function QuizPage() {
   const answeredCount = Object.keys(answers).length;
   const totalQuestions = quizState.questions.length;
   const progressPercent = (answeredCount / totalQuestions) * 100;
+  const currentQuestionIndex = Math.min(answeredCount, totalQuestions - 1);
+  const currentQuestion = quizState.questions[currentQuestionIndex];
 
   return (
-    <div className="flex min-h-screen flex-col bg-background px-4 py-8">
-      <div className="mx-auto w-full max-w-2xl">
-        {/* Header */}
-        <div className="mb-8 space-y-4">
-          <h1 className="text-3xl font-bold">Quiz</h1>
-          <div className="space-y-2">
-            <div className="flex justify-between text-sm text-muted-foreground">
-              <span>Progress</span>
-              <span>
-                {answeredCount} of {totalQuestions} answered
-              </span>
-            </div>
-            <Progress value={progressPercent} className="h-2" />
+    <div className="min-h-screen bg-linear-to-b from-violet-600 to-violet-400 px-4 pb-6 pt-10">
+      <div className="mx-auto w-full max-w-md">
+        <div className="mb-6 flex items-center justify-between">
+          <button onClick={() => navigate('/')} className="flex h-9 w-9 items-center justify-center rounded-full bg-white/20 text-white">
+            ←
+          </button>
+          <p className="text-sm font-semibold text-white">
+            Question {currentQuestionIndex + 1}/{totalQuestions}
+          </p>
+          <button className="flex h-9 w-9 items-center justify-center rounded-full bg-white/20 text-white">
+            🔖
+          </button>
+        </div>
 
-                  {/* Cooldown Warning */}
-                  {cooldownSeconds > 0 && (
-                    <Card className="mb-6 border-yellow-500 bg-yellow-50">
-                      <CardContent className="pt-4">
-                        <p className="text-sm text-yellow-800">
-                          ⏱️ Cooldown active. Try again in {cooldownSeconds}s
-                        </p>
-                      </CardContent>
-                    </Card>
-                  )}
-
-                  {/* Max Attempts Reached */}
-                  {maxAttemptsReached && (
-                    <Card className="mb-6 border-red-500 bg-red-50">
-                      <CardContent className="pt-4">
-                        <p className="text-sm font-semibold text-red-800">
-                          🚫 Maximum attempts reached. Contact moderators for assistance.
-                        </p>
-                      </CardContent>
-                    </Card>
-                  )}
+        <div className="mb-6">
+          <div className="mb-1 h-2 w-full rounded-full bg-white/20">
+            <div
+              className="h-2 rounded-full bg-amber-400 transition-all duration-300"
+              style={{ width: `${progressPercent}%` }}
+            />
+          </div>
+          <div className="flex justify-end">
+            <span className="text-sm font-bold text-amber-300">
+              {answeredCount}/{totalQuestions}
+            </span>
           </div>
         </div>
 
-        {/* Questions */}
-        <div className="space-y-6 pb-8">
-          {quizState.questions.map((question, index) => (
-            <div key={question.id}>
-              <p className="mb-4 text-sm font-semibold text-muted-foreground">
-                Question {index + 1} of {totalQuestions}
-              </p>
-              <QuizQuestion
-                question={question}
-                onAnswer={(optionIndex) => handleAnswer(question.id, optionIndex)}
-                selectedAnswer={answers[question.id]}
-              />
+        {cooldownSeconds > 0 && (
+          <div className="mb-4 rounded-xl border border-amber-400/40 bg-amber-400/20 p-3">
+            <p className="text-center text-sm text-amber-200">⏱️ Cooldown: {cooldownSeconds}s</p>
+          </div>
+        )}
+
+        {maxAttemptsReached && (
+          <div className="mb-4 rounded-xl border border-red-400/40 bg-red-400/20 p-3">
+            <p className="text-center text-sm text-red-200">🚫 Max attempts reached</p>
+          </div>
+        )}
+
+        {currentQuestion && (
+          <div className="mb-5 rounded-3xl border border-white/25 bg-white/15 p-5 backdrop-blur">
+            <p className="mb-6 text-center text-lg font-bold leading-snug text-white">
+              {currentQuestion.question_text}
+            </p>
+            <div className="space-y-3">
+              {currentQuestion.options.map((option, optionIndex) => {
+                const letter = ['A', 'B', 'C', 'D'][optionIndex];
+                const isSelected = answers[currentQuestion.id] === optionIndex;
+                const isAnswered = answers[currentQuestion.id] !== undefined;
+
+                return (
+                  <button
+                    key={optionIndex}
+                    onClick={() => !isAnswered && handleAnswer(currentQuestion.id, optionIndex)}
+                    disabled={isAnswered}
+                    className={`flex w-full items-center gap-3 rounded-xl border px-4 py-3 text-left transition-all ${
+                      isSelected
+                        ? 'bg-white text-violet-700 shadow-lg'
+                        : 'border-white/20 bg-white/15 text-white hover:bg-white/25'
+                    }`}
+                  >
+                    <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-bold ${
+                      isSelected ? 'bg-violet-600 text-white' : 'bg-white/20 text-white'
+                    }`}>
+                      {letter}
+                    </span>
+                    <span className="text-sm">{option}</span>
+                    {isSelected && <span className="ml-auto font-bold text-green-500">✓</span>}
+                  </button>
+                );
+              })}
             </div>
+          </div>
+        )}
+
+        <div className="mb-6 grid grid-cols-4 gap-2">
+          {[
+            { label: 'Answers', icon: '50/50' },
+            { label: 'Audience', icon: '👥' },
+            { label: 'Add time', icon: '⏱' },
+            { label: 'Skip', icon: '⏭' },
+          ].map((button) => (
+            <button
+              key={button.label}
+              className="flex flex-col items-center gap-1 rounded-xl border border-white/20 bg-white/15 px-1 py-2.5 transition-colors hover:bg-white/25"
+            >
+              <span className="text-xs font-bold text-white">{button.icon}</span>
+              <span className="text-[10px] text-white/70">{button.label}</span>
+            </button>
           ))}
         </div>
 
-        {/* Submit Button */}
-        <div className="sticky bottom-0 border-t border-border bg-background py-4">
-          <div className="flex gap-3">
-            <Button
-              onClick={() => navigate('/')}
-              variant="outline"
-              size="lg"
-              className="flex-1"
-            >
-              Cancel
-            </Button>
-            <Button
-              onClick={() => void handleSubmit()}
-              disabled={submitting || answeredCount !== totalQuestions || cooldownSeconds > 0 || maxAttemptsReached}
-              size="lg"
-              className="flex-1"
-            >
-              {submitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              {submitting ? 'Submitting...' : 'Submit Quiz'}
-            </Button>
-          </div>
-        </div>
+        <button
+          onClick={() => void handleSubmit()}
+          disabled={submitting || answeredCount !== totalQuestions || cooldownSeconds > 0 || maxAttemptsReached}
+          className="flex h-13 w-full items-center justify-center gap-2 rounded-full bg-white text-base font-bold text-violet-700 shadow-lg disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          {submitting && <Loader2 className="h-4 w-4 animate-spin" />}
+          {submitting ? 'Submitting...' : answeredCount < totalQuestions ? `Answer all questions (${answeredCount}/${totalQuestions})` : 'Submit Quiz'}
+        </button>
       </div>
     </div>
   );
