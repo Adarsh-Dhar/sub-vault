@@ -22,7 +22,11 @@ Devvit.addTrigger({
     console.log(`[Quiz] NATIVE PostSubmit triggered for ${author.name}`);
 
     try {
-      const hasPassed = await redis.get(`quiz:passed:${author.id}`);
+      const [hasPassedById, hasPassedByName] = await Promise.all([
+        redis.get(`quiz:passed:${author.id}`),
+        redis.get(`quiz:passed:${author.name}`),
+      ]);
+      const hasPassed = hasPassedById === 'true' || hasPassedByName === 'true' ? 'true' : null;
       const post = await reddit.getPostById(postData.id);
       const subredditName = post.subredditName;
 

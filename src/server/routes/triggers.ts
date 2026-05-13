@@ -150,8 +150,12 @@ triggers.post('/on-post-submit', async (c) => {
 
     console.log(`[Quiz] OnPostSubmit triggered — author: ${authorName}, post: ${postId}`);
 
-    // Check if the user has passed the quiz (keyed by userId for reliability)
-    const hasPassed = await redis.get(`quiz:passed:${authorId}`);
+    // Check both keys: userId (set via on-subscribe) and username (always set on quiz submit)
+    const [hasPassedById, hasPassedByName] = await Promise.all([
+      redis.get(`quiz:passed:${authorId}`),
+      redis.get(`quiz:passed:${authorName}`),
+    ]);
+    const hasPassed = hasPassedById === 'true' || hasPassedByName === 'true' ? 'true' : null;
 
     if (hasPassed === 'true') {
       // User passed the quiz — still run an AI "vibe check" for dangerous content
