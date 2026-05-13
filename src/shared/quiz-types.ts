@@ -34,10 +34,23 @@ export type QuizState = {
 };
 
 export type QuizSettings = {
+  // AI Generation Tuning
   difficulty: QuizDifficulty;
-  passing_score: number; // 0-100
   questions_count: number;
+  
+  // Bouncer Thresholds
+  passing_score: number; // 0-100
+  veteran_account_age_days: number; // 0 = disabled, >0 = minimum days
+  veteran_karma_threshold: number; // 0 = disabled, >0 = minimum karma
+  
+  // Rewards & Identity
   pass_flair_text: string;
+  welcome_dm_enabled: boolean;
+  welcome_dm_links: string; // JSON stringified array of { label: string; url: string }[]
+  
+  // Anti-Abuse Controls
+  retry_cooldown_minutes: number; // 0 = no cooldown, >0 = minutes locked out after failure
+  max_attempts: number; // 0 = unlimited, >0 = hard cap per user
 };
 
 export type SettingsResponse = QuizSettings;

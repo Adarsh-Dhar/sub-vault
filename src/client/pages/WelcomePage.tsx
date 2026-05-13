@@ -45,7 +45,7 @@ export default function WelcomePage() {
       });
 
       if (response.ok) {
-        void navigate('/quiz');
+        void navigate('/quiz', { state: { freshGenerate: true } });
       } else {
         const error = await response.json() as { message?: string };
         toast({

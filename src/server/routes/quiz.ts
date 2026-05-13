@@ -7,8 +7,11 @@ import { reddit, redis } from '@devvit/web/server';
 import { generateQuiz } from '../services/gemini';
 import {
   assignPassFlair,
+  checkVeteranStatus,
   getQuizSettings,
   getSubredditRulesText,
+  isUserLockedOut,
+  sendWelcomeDM,
 } from '../services/quiz-data';
 import type {
   QuizState,
@@ -46,6 +49,7 @@ quiz.get('/:username', async (c) => {
 /**
  * POST /api/quiz/generate
  * Generate a new quiz for the current user based on subreddit rules
+ * On veteran bypass, returns special response without questions
  */
 quiz.post('/generate', async (c) => {
   try {
@@ -53,6 +57,17 @@ quiz.post('/generate', async (c) => {
 
     if (!username) {
       return c.json({ status: 'error', message: 'User not authenticated' }, 401);
+    }
+
+    // Check for veteran bypass (Account Age > X days OR Karma > Y)
+    const isVeteran = await checkVeteranStatus(username);
+    if (isVeteran) {
+      return c.json({
+        status: 'veteranBypassed',
+        message: 'Your account qualifies for veteran status. Quiz bypassed.',
+        veteranBypassed: true,
+        username,
+      });
     }
 
     const quizSettings = await getQuizSettings();
@@ -125,13 +140,34 @@ quiz.post('/generate', async (c) => {
 /**
  * POST /api/quiz/submit
  * Submit quiz answers and calculate result.
- * On pass, records the result against BOTH username and userId so the
- * OnPostSubmit trigger (which only knows userId) can check it reliably.
+ * Enforces cooldowns and max attempts on failure.
+ * On pass, records the result and clears lockout state.
  */
 quiz.post('/submit', async (c) => {
   try {
     const submission = (await c.req.json()) as QuizSubmission;
     const { username, answers } = submission;
+
+    // Check if user is locked out
+    const lockoutStatus = await isUserLockedOut(username);
+    if (lockoutStatus.locked) {
+      if (lockoutStatus.reason === 'maxAttemptsReached') {
+        return c.json(
+          { status: 'error', message: 'Maximum attempts reached. Contact moderators.' },
+          429
+        );
+      }
+      if (lockoutStatus.reason === 'cooldownActive') {
+        return c.json(
+          {
+            status: 'error',
+            message: 'Please wait before retrying',
+            cooldownSeconds: lockoutStatus.cooldownSeconds,
+          },
+          429
+        );
+      }
+    }
 
     const stateJson = await redis.get(`quiz:state:${username}`);
     if (!stateJson) {
@@ -182,17 +218,33 @@ quiz.post('/submit', async (c) => {
         await redis.set(`quiz:passed:${userId}`, 'true');
       }
 
-      // Increment attempt count
-      const currentAttempts = await redis.get(`quiz:attempts:${username}`);
-      await redis.set(
-        `quiz:attempts:${username}`,
-        String(parseInt(currentAttempts || '0') + 1)
-      );
+      // Clear any cooldown/attempt tracking on pass
+      await redis.del(`quiz:cooldown:${username}`);
+      await redis.del(`quiz:attempts:${username}`);
 
       try {
         await assignPassFlair(username, quizSettings.pass_flair_text);
       } catch (flairError) {
         console.warn('Failed to assign pass flair:', flairError);
+      }
+
+      // Send welcome DM on pass (if enabled)
+      try {
+        await sendWelcomeDM(username);
+      } catch (dmError) {
+        console.warn('Failed to send welcome DM:', dmError);
+      }
+    } else {
+      // On failure, increment attempts and set cooldown
+      const currentAttempts = await redis.get(`quiz:attempts:${username}`);
+      const newAttempts = parseInt(currentAttempts || '0', 10) + 1;
+      await redis.set(`quiz:attempts:${username}`, String(newAttempts));
+
+      // Set cooldown if enabled (sliding window: each failure starts fresh)
+      if (quizSettings.retry_cooldown_minutes > 0) {
+        const cooldownSeconds = quizSettings.retry_cooldown_minutes * 60;
+        const expiresAt = Date.now() + cooldownSeconds * 1000;
+        await redis.set(`quiz:cooldown:${username}`, String(expiresAt));
       }
     }
 
@@ -200,5 +252,74 @@ quiz.post('/submit', async (c) => {
   } catch (error) {
     console.error('Error submitting quiz:', error);
     return c.json({ status: 'error', message: 'Failed to submit quiz' }, 500);
+  }
+});
+
+/**
+ * POST /api/quiz/reset
+ * Clears a user's quiz state so they can retake it
+ * Also clears cooldown and attempt counters
+ */
+quiz.post('/reset', async (c) => {
+  try {
+    const { username } = (await c.req.json()) as { username: string };
+    await redis.del(`quiz:state:${username}`);
+    await redis.del(`quiz:cooldown:${username}`);
+    await redis.del(`quiz:attempts:${username}`);
+    return c.json({ success: true });
+  } catch (error) {
+    console.error('Error resetting quiz:', error);
+    return c.json({ error: 'Failed to reset quiz' }, 500);
+  }
+});
+
+/**
+ * POST /api/quiz/retry-check
+ * Check if user can retry quiz or is in cooldown
+ * Returns { canRetry: boolean, cooldownSeconds?: number }
+ */
+quiz.post('/retry-check', async (c) => {
+  try {
+    const { username } = (await c.req.json()) as { username: string };
+
+    const lockoutStatus = await isUserLockedOut(username);
+    if (lockoutStatus.locked) {
+      return c.json({
+        canRetry: false,
+        reason: lockoutStatus.reason,
+        cooldownSeconds: lockoutStatus.cooldownSeconds,
+      });
+    }
+
+    return c.json({ canRetry: true });
+  } catch (error) {
+    console.error('Error checking retry status:', error);
+    return c.json({ canRetry: false, error: 'Failed to check retry status' }, 500);
+  }
+});
+
+/**
+ * POST /api/quiz/save-progress
+ * Saves user's current answers to preserve progress on page refresh
+ */
+quiz.post('/save-progress', async (c) => {
+  try {
+    const { username, answers } = (await c.req.json()) as {
+      username: string;
+      answers: Record<number, number>;
+    };
+
+    const stateJson = await redis.get(`quiz:state:${username}`);
+    if (!stateJson) {
+      return c.json({ error: 'Not found' }, 404);
+    }
+
+    const state: QuizState = JSON.parse(stateJson);
+    state.submitted_answers = answers;
+    await redis.set(`quiz:state:${username}`, JSON.stringify(state));
+    return c.json({ saved: true });
+  } catch (error) {
+    console.error('Error saving progress:', error);
+    return c.json({ error: 'Failed to save progress' }, 500);
   }
 });

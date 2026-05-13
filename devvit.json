@@ -23,6 +23,7 @@
     "dir": "dist/server",
     "entry": "index.cjs"
   },
+
   "menu": {
     "items": [
       {
@@ -55,6 +56,7 @@
   "triggers": {
     "onModAction": "/internal/triggers/on-mod-action",
     "onPostSubmit": "/internal/triggers/on-post-submit"
+    
   },
   "scripts": {
     "dev": "vite build --watch",

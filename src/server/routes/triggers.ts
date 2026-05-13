@@ -6,7 +6,12 @@ import { Hono } from 'hono';
 import type { TriggerResponse } from '@devvit/web/shared';
 import { context, reddit, redis } from '@devvit/web/server';
 import { generateQuiz, checkDangerousContent } from '../services/gemini';
-import { getQuizSettings, getSubredditRulesText } from '../services/quiz-data';
+import {
+  checkVeteranStatus,
+  getQuizSettings,
+  getSubredditRulesText,
+  assignPassFlair,
+} from '../services/quiz-data';
 import type { QuizState } from '../../shared/quiz-types';
 import type { OnModActionRequest } from '@devvit/web/shared';
 
@@ -15,7 +20,11 @@ export const triggers = new Hono();
 /**
  * POST /internal/triggers/on-subscribe
  * Triggered automatically when a new user subscribes to the subreddit.
- * Proactively generates a quiz state and sends the user a welcome DM.
+ * 
+ * Flow:
+ * 1. Check if user is veteran (account age > X days OR karma > Y)
+ *    - If veteran: Grant flair + send welcome DM (if enabled) + skip quiz
+ *    - If not veteran: Generate quiz and send quiz invite DM
  */
 triggers.post('/on-subscribe', async (c) => {
   try {
@@ -38,6 +47,47 @@ triggers.post('/on-subscribe', async (c) => {
     }
 
     const quizSettings = await getQuizSettings();
+
+    // Check if user qualifies for veteran bypass
+    const isVeteran = await checkVeteranStatus(username);
+
+    if (isVeteran) {
+      console.log(`[Quiz] User ${username} is veteran, bypassing quiz`);
+      
+      // Grant flair immediately
+      try {
+        await assignPassFlair(username, quizSettings.pass_flair_text);
+        await redis.set(`quiz:passed:${userId}`, 'true');
+        await redis.set(`quiz:passed:${username}`, 'true');
+      } catch (err) {
+        console.warn(`[Quiz] Failed to grant veteran flair to ${username}:`, err);
+      }
+
+      // Send welcome DM if enabled (but not the on-quiz-pass DM, just a simple welcome)
+      if (quizSettings.welcome_dm_enabled) {
+        try {
+          const linksArray = JSON.parse(quizSettings.welcome_dm_links) as Array<{ label: string; url: string }>;
+          const linksText = linksArray
+            .map((link) => `• [${link.label}](${link.url})`)
+            .join('\n');
+
+          const dmText = `Welcome to the community! 🎉\n\nYour account qualifies for veteran status, so you've been automatically granted posting privileges.\n\n**Helpful Resources:**\n${linksText}\n\nHappy posting!`;
+
+          await reddit.sendPrivateMessage({
+            to: username,
+            subject: 'Welcome! Veteran Status Granted',
+            text: dmText,
+          });
+          console.log(`[Quiz] Veteran welcome DM sent to ${username}`);
+        } catch (dmError) {
+          console.warn(`[Quiz] Could not send veteran welcome DM to ${username}:`, dmError);
+        }
+      }
+
+      return c.json<TriggerResponse>({}, 200);
+    }
+
+    // Non-veteran: Generate quiz
     const rules = await getSubredditRulesText();
 
     // 1. Fetch User Comments

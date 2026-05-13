@@ -2,6 +2,7 @@
  * ResultBanner - Displays quiz pass/fail result with score
  */
 
+import { useEffect } from 'react';
 import { CheckCircle2, XCircle } from 'lucide-react';
 import type { QuizResult } from '../../shared/quiz-types';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
@@ -20,6 +21,18 @@ export function ResultBanner({
 }: ResultBannerProps) {
   const scoreFraction = `${result.correct_answers}/${result.total_questions}`;
   const isPass = result.passed;
+
+  // Flash document title on pass
+  useEffect(() => {
+    if (isPass) {
+      const original = document.title;
+      document.title = '🎉 You passed!';
+      const t = setTimeout(() => {
+        document.title = original;
+      }, 4000);
+      return () => clearTimeout(t);
+    }
+  }, [isPass]);
 
   return (
     <Card className={`border-2 ${isPass ? 'border-green-500 bg-green-50' : 'border-red-500 bg-red-50'}`}>
@@ -71,11 +84,19 @@ export function ResultBanner({
         </div>
 
         {isPass && (
-          <div className="rounded-lg border border-green-300 bg-green-100 p-3 text-sm text-green-800">
-            <p>
-              Congratulations! You've successfully completed the onboarding quiz.
-              Welcome to the community!
+          <div className="rounded-lg border border-green-300 bg-green-100 p-4 space-y-2">
+            <p className="font-semibold text-green-800 text-base">
+              🔓 Your posting privileges are now unlocked!
             </p>
+            <p className="text-sm text-green-700">
+              You can now submit posts to this community freely.
+              Your flair has been updated to reflect your verified status.
+            </p>
+          </div>
+        )}
+        {isPass && (
+          <div className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm text-blue-800">
+            ℹ️ It may take a moment for Reddit to sync your new permissions. If your next post is still removed, wait 60 seconds and try again.
           </div>
         )}
       </CardContent>

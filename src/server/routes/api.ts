@@ -5,6 +5,7 @@ import type {
   IncrementResponse,
 } from '../../shared/api';
 import type { QuizSettings } from '../../shared/quiz-types';
+import { getQuizSettings } from '../services/quiz-data';
 
 type ErrorResponse = {
   status: 'error';
@@ -141,21 +142,7 @@ api.get('/moderators', async (c) => {
  */
 api.get('/quiz-settings', async (c) => {
   try {
-    const settingsJson = await redis.get('quiz:settings');
-    const DEFAULT_QUIZ_SETTINGS = {
-      difficulty: 'medium' as const,
-      passing_score: 70,
-      questions_count: 5,
-      pass_flair_text: 'Verified member',
-    };
-    
-    const settings = settingsJson
-      ? {
-          ...DEFAULT_QUIZ_SETTINGS,
-          ...(JSON.parse(settingsJson) as Partial<QuizSettings>),
-        }
-      : DEFAULT_QUIZ_SETTINGS;
-
+    const settings = await getQuizSettings(); // handles both native settings and Redis fallback
     return c.json(settings);
   } catch (error) {
     console.error('Error fetching quiz settings:', error);
@@ -166,47 +153,102 @@ api.get('/quiz-settings', async (c) => {
 /**
  * POST /api/quiz-settings
  * Update quiz settings (moderator-only)
+ * Validates all 10 settings fields
  */
 api.post('/quiz-settings', async (c) => {
   try {
     const newSettings = (await c.req.json()) as Partial<QuizSettings>;
 
-    // Validate input
+    // Validate difficulty
     if (newSettings.difficulty && !['easy', 'medium', 'hard'].includes(newSettings.difficulty)) {
       return c.json({ error: 'Invalid difficulty level' }, 400);
     }
 
+    // Validate passing_score
     if (newSettings.passing_score !== undefined) {
       if (typeof newSettings.passing_score !== 'number' || newSettings.passing_score < 0 || newSettings.passing_score > 100) {
         return c.json({ error: 'Passing score must be between 0 and 100' }, 400);
       }
     }
 
+    // Validate questions_count
     if (newSettings.questions_count !== undefined) {
       if (typeof newSettings.questions_count !== 'number' || newSettings.questions_count < 1 || newSettings.questions_count > 50) {
         return c.json({ error: 'Questions count must be between 1 and 50' }, 400);
       }
     }
 
-    // Fetch current settings
-    const DEFAULT_QUIZ_SETTINGS = {
-      difficulty: 'medium' as const,
-      passing_score: 70,
-      questions_count: 5,
-      pass_flair_text: 'Verified member',
-    };
-    
-    const settingsJson = await redis.get('quiz:settings');
-    const settings: QuizSettings = settingsJson
-      ? {
-          ...DEFAULT_QUIZ_SETTINGS,
-          ...(JSON.parse(settingsJson) as Partial<QuizSettings>),
-        }
-      : DEFAULT_QUIZ_SETTINGS;
+    // Validate pass_flair_text
+    if (newSettings.pass_flair_text !== undefined) {
+      if (typeof newSettings.pass_flair_text !== 'string' || newSettings.pass_flair_text.length > 64) {
+        return c.json({ error: 'Flair text must be a string under 64 characters' }, 400);
+      }
+    }
 
-    // Merge with new settings
+    // Validate veteran_account_age_days
+    if (newSettings.veteran_account_age_days !== undefined) {
+      if (typeof newSettings.veteran_account_age_days !== 'number' || newSettings.veteran_account_age_days < 0 || newSettings.veteran_account_age_days > 36500) {
+        return c.json({ error: 'Veteran account age must be between 0 and 36500 days' }, 400);
+      }
+    }
+
+    // Validate veteran_karma_threshold
+    if (newSettings.veteran_karma_threshold !== undefined) {
+      if (typeof newSettings.veteran_karma_threshold !== 'number' || newSettings.veteran_karma_threshold < 0 || newSettings.veteran_karma_threshold > 1000000) {
+        return c.json({ error: 'Veteran karma threshold must be between 0 and 1000000' }, 400);
+      }
+    }
+
+    // Validate welcome_dm_enabled
+    if (newSettings.welcome_dm_enabled !== undefined) {
+      if (typeof newSettings.welcome_dm_enabled !== 'boolean') {
+        return c.json({ error: 'Welcome DM enabled must be a boolean' }, 400);
+      }
+    }
+
+    // Validate welcome_dm_links (should be JSON stringified array)
+    if (newSettings.welcome_dm_links !== undefined) {
+      if (typeof newSettings.welcome_dm_links !== 'string') {
+        return c.json({ error: 'Welcome DM links must be a JSON string' }, 400);
+      }
+      try {
+        const parsed = JSON.parse(newSettings.welcome_dm_links);
+        if (!Array.isArray(parsed)) {
+          return c.json({ error: 'Welcome DM links must be a JSON array' }, 400);
+        }
+        // Validate array structure
+        for (const link of parsed) {
+          if (!link.label || !link.url || typeof link.label !== 'string' || typeof link.url !== 'string') {
+            return c.json({ error: 'Each link must have label and url strings' }, 400);
+          }
+        }
+      } catch {
+        return c.json({ error: 'Welcome DM links must be valid JSON' }, 400);
+      }
+    }
+
+    // Validate retry_cooldown_minutes
+    if (newSettings.retry_cooldown_minutes !== undefined) {
+      if (typeof newSettings.retry_cooldown_minutes !== 'number' || newSettings.retry_cooldown_minutes < 0 || newSettings.retry_cooldown_minutes > 1440) {
+        return c.json({ error: 'Retry cooldown must be between 0 and 1440 minutes' }, 400);
+      }
+    }
+
+    // Validate max_attempts
+    if (newSettings.max_attempts !== undefined) {
+      if (typeof newSettings.max_attempts !== 'number' || newSettings.max_attempts < 0 || newSettings.max_attempts > 100) {
+        return c.json({ error: 'Max attempts must be between 0 and 100' }, 400);
+      }
+    }
+
+    // Fetch current settings and merge
+    const settingsJson = await redis.get('quiz:settings');
+    const currentSettings = settingsJson
+      ? (JSON.parse(settingsJson) as QuizSettings)
+      : (await getQuizSettings());
+
     const updatedSettings: QuizSettings = {
-      ...settings,
+      ...currentSettings,
       ...newSettings,
     };
 
