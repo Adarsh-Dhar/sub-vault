@@ -123,27 +123,56 @@ export function ModSettingsModal({
     }
   };
 
+  const glassCardClass = 'space-y-4 rounded-3xl border border-white/20 bg-white/15 p-5 shadow-xl backdrop-blur';
+  const fieldClass = 'border-white/30 bg-white/10 text-white placeholder:text-white/55 focus-visible:border-white/45 focus-visible:ring-white/25';
+  const hintClass = 'text-xs text-white/65';
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="w-full max-w-2xl max-h-[90vh] overflow-y-auto">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <Settings className="h-5 w-5" />
-            Quiz Settings
-          </DialogTitle>
-          <DialogDescription>
-            Configure all aspects of the rules quiz system
-          </DialogDescription>
-        </DialogHeader>
+      <DialogContent className="w-full max-w-2xl overflow-hidden rounded-4xl border border-white/20 bg-linear-to-b from-violet-600 via-violet-500 to-violet-400 p-0 text-white shadow-2xl sm:max-h-[90vh] sm:overflow-y-auto">
+        <div className="px-6 pb-6 pt-6 text-white">
+          <DialogHeader className="space-y-3 text-left">
+            <div className="flex items-center gap-2">
+              <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-white/18 text-white shadow-lg shadow-violet-950/10 backdrop-blur">
+                <Settings className="h-5 w-5" />
+              </div>
+              <div className="space-y-1">
+                <DialogTitle className="text-xl font-semibold tracking-tight">
+                  Quiz Settings
+                </DialogTitle>
+                <DialogDescription className="text-sm text-white/75">
+                  Configure all aspects of the rules quiz system
+                </DialogDescription>
+              </div>
+            </div>
+            <div className="flex flex-wrap gap-2 text-xs font-medium text-white/85">
+              <span className="rounded-full border border-white/20 bg-white/15 px-3 py-1 backdrop-blur">
+                AI generation
+              </span>
+              <span className="rounded-full border border-white/20 bg-white/15 px-3 py-1 backdrop-blur">
+                Thresholds
+              </span>
+              <span className="rounded-full border border-white/20 bg-white/15 px-3 py-1 backdrop-blur">
+                Rewards
+              </span>
+              <span className="rounded-full border border-white/20 bg-white/15 px-3 py-1 backdrop-blur">
+                Anti-abuse
+              </span>
+            </div>
+          </DialogHeader>
+        </div>
 
-        <div className="space-y-6 py-4">
+        <div className="space-y-5 px-6 py-6">
           {/* Section 1: AI Generation Tuning */}
-          <div className="space-y-4 rounded-lg border border-border p-4">
-            <h3 className="font-semibold text-base">AI Generation Tuning</h3>
+          <div className={glassCardClass}>
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.28em] text-white/80">AI Generation Tuning</p>
+              <p className="mt-1 text-sm text-white/72">Tune how the quiz is built before it reaches the user.</p>
+            </div>
 
             {/* Difficulty */}
             <div className="space-y-2">
-              <Label htmlFor="difficulty">Quiz Difficulty</Label>
+              <Label htmlFor="difficulty" className="text-white/90">Quiz Difficulty</Label>
               <Select
                 value={settings.difficulty}
                 onValueChange={(value) =>
@@ -154,20 +183,20 @@ export function ModSettingsModal({
                 }
                 disabled={loading}
               >
-                <SelectTrigger id="difficulty">
+                <SelectTrigger id="difficulty" className={fieldClass}>
                   <SelectValue />
                 </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="easy">Easy - Direct rule questions</SelectItem>
-                  <SelectItem value="medium">Medium - Situational judgement</SelectItem>
-                  <SelectItem value="hard">Hard - Complex edge cases</SelectItem>
+                <SelectContent className="border-white/25 bg-violet-700/95 text-white backdrop-blur">
+                  <SelectItem value="easy" className="text-white focus:bg-white/15 focus:text-white">Easy - Direct rule questions</SelectItem>
+                  <SelectItem value="medium" className="text-white focus:bg-white/15 focus:text-white">Medium - Situational judgement</SelectItem>
+                  <SelectItem value="hard" className="text-white focus:bg-white/15 focus:text-white">Hard - Complex edge cases</SelectItem>
                 </SelectContent>
               </Select>
             </div>
 
             {/* Questions Count */}
             <div className="space-y-2">
-              <Label htmlFor="questions_count">Number of Questions</Label>
+              <Label htmlFor="questions_count" className="text-white/90">Number of Questions</Label>
               <Input
                 id="questions_count"
                 type="number"
@@ -181,20 +210,24 @@ export function ModSettingsModal({
                   }))
                 }
                 disabled={loading}
+                className={fieldClass}
               />
-              <p className="text-xs text-muted-foreground">
+              <p className={hintClass}>
                 Questions per quiz (1-50). 3-5 for casual communities, 8-10 for serious ones.
               </p>
             </div>
           </div>
 
           {/* Section 2: Bouncer Thresholds */}
-          <div className="space-y-4 rounded-lg border border-border p-4">
-            <h3 className="font-semibold text-base">Bouncer Thresholds</h3>
+          <div className={glassCardClass}>
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.28em] text-white/80">Bouncer Thresholds</p>
+              <p className="mt-1 text-sm text-white/72">Set the rules for who passes, bypasses, and gets locked out.</p>
+            </div>
 
             {/* Passing Score */}
             <div className="space-y-2">
-              <Label htmlFor="passing_score">Passing Score (%)</Label>
+              <Label htmlFor="passing_score" className="text-white/90">Passing Score (%)</Label>
               <Input
                 id="passing_score"
                 type="number"
@@ -208,15 +241,16 @@ export function ModSettingsModal({
                   }))
                 }
                 disabled={loading}
+                className={fieldClass}
               />
-              <p className="text-xs text-muted-foreground">
+              <p className={hintClass}>
                 Minimum percentage required to pass (0-100)
               </p>
             </div>
 
             {/* Veteran Account Age */}
             <div className="space-y-2">
-              <Label htmlFor="veteran_account_age_days">Veteran Account Age (days)</Label>
+              <Label htmlFor="veteran_account_age_days" className="text-white/90">Veteran Account Age (days)</Label>
               <Input
                 id="veteran_account_age_days"
                 type="number"
@@ -230,15 +264,16 @@ export function ModSettingsModal({
                   }))
                 }
                 disabled={loading}
+                className={fieldClass}
               />
-              <p className="text-xs text-muted-foreground">
+              <p className={hintClass}>
                 Bypass quiz if account older than X days (0 = disabled)
               </p>
             </div>
 
             {/* Veteran Karma Threshold */}
             <div className="space-y-2">
-              <Label htmlFor="veteran_karma_threshold">Veteran Karma Threshold</Label>
+              <Label htmlFor="veteran_karma_threshold" className="text-white/90">Veteran Karma Threshold</Label>
               <Input
                 id="veteran_karma_threshold"
                 type="number"
@@ -252,20 +287,24 @@ export function ModSettingsModal({
                   }))
                 }
                 disabled={loading}
+                className={fieldClass}
               />
-              <p className="text-xs text-muted-foreground">
+              <p className={hintClass}>
                 Bypass quiz if total karma exceeds this (0 = disabled). Uses OR logic with account age.
               </p>
             </div>
           </div>
 
           {/* Section 3: Rewards & Identity */}
-          <div className="space-y-4 rounded-lg border border-border p-4">
-            <h3 className="font-semibold text-base">Rewards & Identity</h3>
+          <div className={glassCardClass}>
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.28em] text-white/80">Rewards & Identity</p>
+              <p className="mt-1 text-sm text-white/72">Control the flair and follow-up messaging after a pass.</p>
+            </div>
 
             {/* Flair Text */}
             <div className="space-y-2">
-              <Label htmlFor="pass_flair_text">Verified Flair Text</Label>
+              <Label htmlFor="pass_flair_text" className="text-white/90">Verified Flair Text</Label>
               <Input
                 id="pass_flair_text"
                 type="text"
@@ -279,8 +318,9 @@ export function ModSettingsModal({
                 placeholder="e.g., Verified member"
                 disabled={loading}
                 maxLength={64}
+                className={fieldClass}
               />
-              <p className="text-xs text-muted-foreground">
+              <p className={hintClass}>
                 Flair assigned when user passes the quiz (max 64 chars)
               </p>
             </div>
@@ -298,14 +338,14 @@ export function ModSettingsModal({
                 }
                 disabled={loading}
               />
-              <Label htmlFor="welcome_dm_enabled" className="flex-1">
+              <Label htmlFor="welcome_dm_enabled" className="flex-1 text-white/90">
                 Send Welcome DM on Pass
               </Label>
             </div>
 
             {/* Welcome DM Links */}
             <div className="space-y-2">
-              <Label htmlFor="welcome_dm_links">Welcome DM Links (JSON)</Label>
+              <Label htmlFor="welcome_dm_links" className="text-white/90">Welcome DM Links (JSON)</Label>
               <Textarea
                 id="welcome_dm_links"
                 value={settings.welcome_dm_links}
@@ -319,25 +359,28 @@ export function ModSettingsModal({
                   { label: 'Community Rules', url: 'https://reddit.com/r/example/wiki' },
                 ], null, 2)}
                 disabled={loading}
-                className="font-mono text-xs"
+                className={`${fieldClass} font-mono text-xs`}
                 rows={4}
               />
               {linkError && (
-                <p className="text-xs text-red-500">Error: {linkError}</p>
+                <p className="text-xs text-rose-200">Error: {linkError}</p>
               )}
-              <p className="text-xs text-muted-foreground">
+              <p className={hintClass}>
                 Array of {'{label, url}'} objects. Sent in welcome DM.
               </p>
             </div>
           </div>
 
           {/* Section 4: Anti-Abuse Controls */}
-          <div className="space-y-4 rounded-lg border border-border p-4">
-            <h3 className="font-semibold text-base">Anti-Abuse Controls</h3>
+          <div className={glassCardClass}>
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.28em] text-white/80">Anti-Abuse Controls</p>
+              <p className="mt-1 text-sm text-white/72">Limit retries and slow down brute-force attempts.</p>
+            </div>
 
             {/* Retry Cooldown */}
             <div className="space-y-2">
-              <Label htmlFor="retry_cooldown_minutes">Retry Cooldown (minutes)</Label>
+              <Label htmlFor="retry_cooldown_minutes" className="text-white/90">Retry Cooldown (minutes)</Label>
               <Input
                 id="retry_cooldown_minutes"
                 type="number"
@@ -351,15 +394,16 @@ export function ModSettingsModal({
                   }))
                 }
                 disabled={loading}
+                className={fieldClass}
               />
-              <p className="text-xs text-muted-foreground">
+              <p className={hintClass}>
                 Minutes to wait after failed attempt (0 = no cooldown). 10 mins is typical.
               </p>
             </div>
 
             {/* Max Attempts */}
             <div className="space-y-2">
-              <Label htmlFor="max_attempts">Maximum Attempts</Label>
+              <Label htmlFor="max_attempts" className="text-white/90">Maximum Attempts</Label>
               <Input
                 id="max_attempts"
                 type="number"
@@ -373,26 +417,28 @@ export function ModSettingsModal({
                   }))
                 }
                 disabled={loading}
+                className={fieldClass}
               />
-              <p className="text-xs text-muted-foreground">
+              <p className={hintClass}>
                 Max quiz attempts allowed per user (0 = unlimited). Helps prevent brute-force.
               </p>
             </div>
           </div>
         </div>
 
-        <div className="flex gap-2 justify-end">
+        <div className="flex justify-end gap-2 border-t border-white/20 bg-white/10 px-6 py-4 backdrop-blur">
           <Button
             variant="outline"
             onClick={() => onOpenChange(false)}
             disabled={loading}
+            className="rounded-full border-white/35 bg-white/10 text-white hover:bg-white/20"
           >
             Cancel
           </Button>
           <Button
             onClick={handleSave}
             disabled={loading || linkError !== null}
-            className="gap-2"
+            className="gap-2 rounded-full bg-violet-600 text-white shadow-lg shadow-violet-300 hover:bg-violet-700"
           >
             {loading ? (
               <>

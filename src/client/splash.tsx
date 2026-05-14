@@ -24,22 +24,6 @@ export const Splash = () => {
       </div>
 
       <div className="relative w-full max-w-72 rounded-3xl border border-white/20 bg-white/16 p-4 shadow-2xl shadow-violet-950/15 backdrop-blur">
-        <div className="mb-3 flex items-center justify-between">
-          <div>
-            <p className="text-sm font-semibold text-white">Jump in</p>
-            <p className="text-xs text-white/65">Open the expanded game view to play</p>
-          </div>
-          <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-white/20 text-lg">
-            ⚡
-          </div>
-        </div>
-        <div className="mb-4 grid grid-cols-3 gap-2">
-          {['⚽', '🔬', '🎬'].map((emoji) => (
-            <div key={emoji} className="flex h-12 items-center justify-center rounded-2xl bg-white/14 text-2xl">
-              {emoji}
-            </div>
-          ))}
-        </div>
         <button
           className="flex h-13 w-full items-center justify-center rounded-full bg-white text-base font-bold text-violet-700 shadow-lg shadow-violet-950/10 transition-transform active:scale-[0.98] hover:bg-violet-50"
           onClick={(e) => requestExpandedMode(e.nativeEvent, 'game')}
