@@ -212,7 +212,7 @@ export async function trackPostView(username: string, postId: string): Promise<n
  * Increment comments count
  */
 export async function incrementCommentCount(username: string): Promise<number> {
-  const profile = await getProfile(username);
+  const profile = await getOrCreateProfile(username);
   profile.commentsCount += 1;
   profile.lastSeen = Date.now();
   await updateProfile(profile);
