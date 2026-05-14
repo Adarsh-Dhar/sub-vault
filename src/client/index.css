@@ -123,3 +123,23 @@
     @apply bg-background text-foreground;
   }
 }
+
+/* ──────────────────────────────────────────────────
+   Gradient compatibility shim
+   Tailwind v4 uses bg-linear-to-* but Tailwind v3
+   uses bg-gradient-to-*. Keep both working.
+────────────────────────────────────────────────── */
+@layer utilities {
+  /* Safe-area bottom inset for notched devices */
+  .pb-safe {
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+  .pt-safe {
+    padding-top: env(safe-area-inset-top, 0px);
+  }
+
+  /* Tap highlight removal for mobile */
+  .tap-highlight-none {
+    -webkit-tap-highlight-color: transparent;
+  }
+}

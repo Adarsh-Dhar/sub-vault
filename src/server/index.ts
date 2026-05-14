@@ -5,7 +5,7 @@ import { api } from './routes/api';
 import { forms } from './routes/forms';
 import { menu } from './routes/menu';
 import { triggers } from './routes/triggers';
-import { quiz } from './routes/quiz';
+import { rank } from './routes/rank';
 
 const app = new Hono();
 const internal = new Hono();
@@ -15,7 +15,7 @@ internal.route('/form', forms);
 internal.route('/triggers', triggers);
 
 app.route('/api', api);
-app.route('/api/quiz', quiz);
+app.route('/api/rank', rank);
 app.route('/internal', internal);
 
 serve({

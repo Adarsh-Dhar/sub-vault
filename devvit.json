@@ -41,22 +41,21 @@
         "endpoint": "/internal/menu/example-form"
       },
       {
-        "label": "Quiz Settings",
-        "description": "Configure quiz difficulty, passing score, and other options",
+        "label": "Rank Settings",
+        "description": "Configure ranking levels, thresholds, and flair",
         "location": "subreddit",
         "forUserType": "moderator",
-        "endpoint": "/internal/menu/quiz-settings"
+        "endpoint": "/internal/menu/rank-settings"
       }
     ]
   },
   "forms": {
-    "exampleForm": "/internal/form/example-submit",
-    "quizSettingsForm": "/internal/form/quiz-settings-submit"
+    "exampleForm": "/internal/form/example-submit"
   },
   "triggers": {
     "onModAction": "/internal/triggers/on-mod-action",
-    "onPostSubmit": "/internal/triggers/on-post-submit"
-    
+    "onPostSubmit": "/internal/triggers/on-post-submit",
+    "onCommentSubmit": "/internal/triggers/on-comment-submit"
   },
   "scripts": {
     "dev": "vite build --watch",
