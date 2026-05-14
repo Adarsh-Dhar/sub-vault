@@ -1,20 +1,26 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Loader2, Settings, ShieldAlert, ShieldCheck, BookOpen, ClipboardList, Target, Clock, ExternalLink, AlertTriangle, Zap } from 'lucide-react';
+import { Loader2, Settings, ShieldAlert, BookOpen, ClipboardList, Target, Clock, ExternalLink, AlertTriangle } from 'lucide-react';
 import type { QuizSettings } from '../../shared/quiz-types';
 import { Button } from '../components/ui/button';
 import { ModSettingsModal } from '../components/ModSettingsModal';
+import { UserStatusBadge } from '../components/UserStatusBadge';
 import { useInit } from '../contexts/init-context';
 import { useToast } from '../hooks/use-toast';
+
+type GenerationStatus = 'idle' | 'generating' | 'ready' | 'error';
 
 export default function WelcomePage() {
   const navigate = useNavigate();
   const { toast } = useToast();
-  const [loading, setLoading] = useState(false);
   const [settings, setSettings] = useState<QuizSettings | null>(null);
   const [settingsModalOpen, setSettingsModalOpen] = useState(false);
   const { init, loading: initLoading, error: initError } = useInit();
 
+  const [generationStatus, setGenerationStatus] = useState<GenerationStatus>('idle');
+  const generationStartedRef = useRef(false);
+
+  // Fetch quiz settings on mount
   useEffect(() => {
     const fetchSettings = async () => {
       try {
@@ -30,8 +36,45 @@ export default function WelcomePage() {
     void fetchSettings();
   }, []);
 
+  // Pre-generate quiz as soon as we have a valid user session — runs in background
+  useEffect(() => {
+    if (initLoading || !init?.username || init.username === 'anonymous') return;
+    if (generationStartedRef.current) return;
+    generationStartedRef.current = true;
+
+    const preGenerate = async () => {
+      setGenerationStatus('generating');
+      try {
+        const response = await fetch('/api/quiz/generate', { method: 'POST' });
+        if (response.ok) {
+          setGenerationStatus('ready');
+        } else {
+          console.error('Background quiz generation failed');
+          setGenerationStatus('error');
+        }
+      } catch (error) {
+        console.error('Error pre-generating quiz:', error);
+        setGenerationStatus('error');
+      }
+    };
+
+    void preGenerate();
+  }, [init, initLoading]);
+
   const handleStartQuiz = async () => {
-    setLoading(true);
+    // Quiz already ready — navigate instantly
+    if (generationStatus === 'ready') {
+      void navigate('/quiz');
+      return;
+    }
+
+    // Still generating — navigate anyway, QuizPage has its own loading skeleton
+    if (generationStatus === 'generating') {
+      void navigate('/quiz');
+      return;
+    }
+
+    // Fallback: generate on demand if background attempt failed or never started
     try {
       const response = await fetch('/api/quiz/generate', { method: 'POST' });
       if (response.ok) {
@@ -51,8 +94,6 @@ export default function WelcomePage() {
         description: 'Failed to connect to server',
         variant: 'destructive',
       });
-    } finally {
-      setLoading(false);
     }
   };
 
@@ -61,7 +102,58 @@ export default function WelcomePage() {
   const retryCooldown = settings?.retry_cooldown_minutes || 10;
   const username = init?.username && init.username !== 'anonymous' ? init.username : 'Guest';
   const initial = username[0]?.toUpperCase() || 'G';
-  const isVerified = false;
+  const [isVerified, setIsVerified] = useState<boolean | null>(null);
+  const [karma, setKarma] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (initLoading || !init?.username || init.username === 'anonymous') {
+      setIsVerified(null);
+      setKarma(null);
+      return;
+    }
+
+    const check = async () => {
+      try {
+        const res = await fetch(`/api/quiz/${encodeURIComponent(init.username)}`);
+        if (res.ok) {
+          const data = await res.json();
+          const passed = data?.result?.passed === true;
+          setIsVerified(passed);
+        } else {
+          setIsVerified(false);
+        }
+      } catch (err) {
+        console.warn('Failed to check verification status', err);
+        setIsVerified(false);
+      }
+    };
+
+    const fetchKarma = async () => {
+      try {
+        const res = await fetch('/api/user/karma');
+        if (res.ok) {
+          const data = await res.json() as { karma: number };
+          setKarma(data.karma);
+        }
+      } catch (err) {
+        console.warn('Failed to fetch karma', err);
+      }
+    };
+
+    void check();
+    void fetchKarma();
+  }, [init, initLoading]);
+
+  const isUserReady = !initLoading && !!init?.username && init.username !== 'anonymous';
+  const isGenerating = generationStatus === 'generating';
+  const isReady = generationStatus === 'ready';
+
+  const buttonLabel = () => {
+    if (initLoading) return 'Loading…';
+    if (!isUserReady) return 'Loading…';
+    if (isGenerating) return 'Preparing Assessment…';
+    return `Begin Verification · Pass ${passingScore}%`;
+  };
 
   return (
     <div className="min-h-screen bg-linear-to-b from-violet-600 via-violet-500 to-violet-400 px-4 pb-28 pt-8">
@@ -95,19 +187,10 @@ export default function WelcomePage() {
               </div>
               <div>
                 <p className="text-sm font-semibold text-white">{username}</p>
-                <p className="text-xs text-white/65 font-mono">reddit user</p>
+                <p className="text-xs text-white/65 font-mono">reddit user {karma !== null ? `• ${karma.toLocaleString()} karma` : ''}</p>
               </div>
             </div>
-            <div className={`flex items-center gap-1.5 rounded-full border border-white/40 px-3 py-1.5 text-xs font-semibold ${
-              isVerified
-                ? 'bg-green-400/20 text-green-100'
-                : 'bg-red-400/20 text-red-100'
-            }`}>
-              {isVerified
-                ? <><ShieldCheck className="h-3.5 w-3.5" /> Verified</>
-                : <><ShieldAlert className="h-3.5 w-3.5" /> Restricted</>
-              }
-            </div>
+            <UserStatusBadge isModerator={init?.isModerator ?? undefined} isVerified={isVerified} loading={initLoading} />
           </div>
         </div>
 
@@ -143,6 +226,12 @@ export default function WelcomePage() {
                 </p>
                 <p className="text-[11px] text-white/65">Questions drawn from community guidelines</p>
               </div>
+              {isGenerating && (
+                <Loader2 className="ml-auto h-3.5 w-3.5 shrink-0 animate-spin text-amber-300" />
+              )}
+              {isReady && (
+                <span className="ml-auto text-[10px] font-semibold text-green-300">✓ Ready</span>
+              )}
             </div>
             <div className="h-px bg-white/10" />
             <div className="flex items-center gap-3">
@@ -189,35 +278,16 @@ export default function WelcomePage() {
           </a>
         </div>
 
-        {/* Bottom sheet with CTA and points */}
+        {/* Bottom sheet with CTA */}
         <div className="fixed inset-x-0 bottom-0 z-10 rounded-t-4xl bg-white px-4 pb-6 pt-3 shadow-[0_-12px_40px_rgba(0,0,0,0.18)]">
-          <div className="mx-auto mb-4 flex max-w-md items-end justify-between">
-            <div className="flex flex-col items-center gap-1">
-              <span className="text-xl">🏠</span>
-              <span className="text-[10px] font-medium text-violet-600">Checkpoint</span>
-              <div className="h-1 w-1 rounded-full bg-violet-600" />
-            </div>
-            <div className="flex flex-col items-center gap-1">
-              <span className="text-xl">📊</span>
-              <span className="text-[10px] font-medium text-gray-400">Progress</span>
-            </div>
-            <div className="flex flex-col items-center gap-1">
-              <span className="text-xl">📚</span>
-              <span className="text-[10px] font-medium text-gray-400">Resources</span>
-            </div>
-            <div className="flex flex-col items-center gap-1">
-              <span className="text-xl">⚙️</span>
-              <span className="text-[10px] font-medium text-gray-400">Settings</span>
-            </div>
-          </div>
           <Button
             onClick={() => void handleStartQuiz()}
-            disabled={loading || initLoading || !init?.username || init.username === 'anonymous'}
+            disabled={!isUserReady}
             size="lg"
-            className="h-13 w-full rounded-full bg-violet-600 text-base font-bold text-white shadow-lg shadow-violet-300 hover:bg-violet-700"
+            className="h-13 w-full rounded-full bg-violet-600 text-base font-bold text-white shadow-lg shadow-violet-300 hover:bg-violet-700 disabled:opacity-50"
           >
-            {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-            {loading ? 'Preparing Assessment…' : initLoading ? 'Loading…' : `Begin Verification · Pass ${passingScore}%`}
+            {isGenerating && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+            {buttonLabel()}
           </Button>
         </div>
       </div>

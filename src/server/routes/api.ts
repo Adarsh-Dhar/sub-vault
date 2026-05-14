@@ -137,6 +137,29 @@ api.get('/moderators', async (c) => {
 });
 
 /**
+ * GET /api/user/karma
+ * Fetch total karma for the current user
+ */
+api.get('/user/karma', async (c) => {
+  try {
+    const username = await reddit.getCurrentUsername();
+    if (!username) {
+      return c.json({ error: 'User not authenticated' }, 401);
+    }
+
+    const user = await reddit.getUserByUsername(username);
+    if (!user) {
+      return c.json({ error: 'User not found' }, 404);
+    }
+
+    return c.json({ karma: user.linkKarma + user.commentKarma });
+  } catch (err) {
+    console.error('Failed to fetch user karma:', err);
+    return c.json({ error: 'Failed to fetch karma' }, 500);
+  }
+});
+
+/**
  * GET /api/quiz-settings
  * Fetch current quiz settings
  */
