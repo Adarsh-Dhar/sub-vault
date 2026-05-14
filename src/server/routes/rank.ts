@@ -23,6 +23,34 @@ import {
 export const rank = new Hono();
 
 /**
+ * GET /api/rank/:username
+ * Fetch user's full rank profile and progress to next level
+ */
+rank.get('/:username', async (c) => {
+  const username = c.req.param('username');
+
+  try {
+    const profile = await getOrCreateProfile(username);
+    const progress = await getProgressToNextLevel(username);
+    const karma = await getUserKarma(username);
+    const accountAge = await getUserAccountAge(username);
+
+    return c.json({
+      status: 'success',
+      profile,
+      progress,
+      userStats: {
+        totalKarma: karma,
+        accountAge,
+      },
+    });
+  } catch (error) {
+    console.error('Error fetching rank profile:', error);
+    return c.json({ status: 'error', message: 'Failed to fetch profile' }, 500);
+  }
+});
+
+/**
  * GET /api/rank/init
  * Initialize and fetch current user's profile on app load
  */
@@ -51,34 +79,6 @@ rank.get('/init', async (c) => {
   } catch (error) {
     console.error('Error in init:', error);
     return c.json({ status: 'error', message: 'Failed to initialize' }, 500);
-  }
-});
-
-/**
- * GET /api/rank/:username
- * Fetch user's full rank profile and progress to next level
- */
-rank.get('/:username', async (c) => {
-  const username = c.req.param('username');
-
-  try {
-    const profile = await getOrCreateProfile(username);
-    const progress = await getProgressToNextLevel(username);
-    const karma = await getUserKarma(username);
-    const accountAge = await getUserAccountAge(username);
-
-    return c.json({
-      status: 'success',
-      profile,
-      progress,
-      userStats: {
-        totalKarma: karma,
-        accountAge,
-      },
-    });
-  } catch (error) {
-    console.error('Error fetching rank profile:', error);
-    return c.json({ status: 'error', message: 'Failed to fetch profile' }, 500);
   }
 });
 

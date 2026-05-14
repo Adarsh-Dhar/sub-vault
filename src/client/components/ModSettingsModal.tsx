@@ -74,6 +74,22 @@ export function ModSettingsModal({
   const labelCls = 'block text-sm font-medium text-white/90 mb-1.5';
   const hintCls = 'mt-1.5 text-xs text-white/55 leading-relaxed';
 
+  const formatSeconds = (seconds: number): string => {
+    const hours = Math.floor(seconds / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    const remainingSeconds = seconds % 60;
+
+    if (hours > 0) {
+      return `${hours}h ${minutes}m${remainingSeconds ? ` ${remainingSeconds}s` : ''}`;
+    }
+
+    if (minutes > 0) {
+      return `${minutes}m${remainingSeconds ? ` ${remainingSeconds}s` : ''}`;
+    }
+
+    return `${seconds}s`;
+  };
+
   const Divider = () => <div className="my-3.5 h-px bg-white/10" />;
 
   const Section = ({ title, subtitle, children }: { title: string; subtitle: string; children: React.ReactNode }) => (
@@ -97,6 +113,8 @@ export function ModSettingsModal({
             id={`hub-${levelIndex}`}
             type="number"
             min="0"
+            max="86400"
+            step="30"
             value={levelReqs.hubSeconds}
             onChange={(e) => {
               const newSettings = { ...settings };
@@ -106,7 +124,7 @@ export function ModSettingsModal({
             disabled={loading}
             className={inputCls}
           />
-          <p className={hintCls}>Time spent in community hub</p>
+          <p className={hintCls}>Time spent in community hub, stored in seconds. Current value: {formatSeconds(levelReqs.hubSeconds)}.</p>
         </div>
 
         <Divider />
@@ -168,7 +186,7 @@ export function ModSettingsModal({
         role="dialog"
         aria-modal="true"
         aria-label="Rank Settings"
-        className="relative box-border flex w-full flex-col overflow-hidden rounded-t-3xl sm:rounded-3xl bg-gradient-to-b from-violet-600 via-violet-500 to-violet-400 shadow-2xl"
+        className="relative box-border flex w-full flex-col overflow-hidden rounded-t-3xl sm:rounded-3xl bg-linear-to-b from-violet-600 via-violet-500 to-violet-400 shadow-2xl"
         style={{ maxWidth: 'min(480px, 100vw)', maxHeight: '92dvh' }}
         onMouseDown={(e) => e.stopPropagation()}
       >

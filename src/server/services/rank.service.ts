@@ -41,6 +41,43 @@ function getLeaderboardKey(subreddit: string): string {
   return `rank:leaderboard:${subreddit}`;
 }
 
+function getFeedCacheMetaKey(subreddit: string): string {
+  return `rank:feed-meta:${subreddit}`;
+}
+
+function normalizeRankSettings(input: Partial<RankThresholdConfig>): RankThresholdConfig {
+  return {
+    0: { ...DEFAULT_THRESHOLDS[0], ...input[0] },
+    1: { ...DEFAULT_THRESHOLDS[1], ...input[1] },
+    2: { ...DEFAULT_THRESHOLDS[2], ...input[2] },
+    3: { ...DEFAULT_THRESHOLDS[3], ...input[3] },
+    4: { ...DEFAULT_THRESHOLDS[4], ...input[4] },
+  };
+}
+
+async function getAccountCreatedAt(username: string): Promise<number> {
+  try {
+    const user = await reddit.getUserByUsername(username);
+    if (!user || !user.createdAt || !(user.createdAt instanceof Date)) {
+      return Date.now();
+    }
+
+    return user.createdAt.getTime();
+  } catch (error) {
+    console.error('Failed to get account creation time:', error);
+    return Date.now();
+  }
+}
+
+async function hydrateProfile(profile: RankProfile): Promise<RankProfile> {
+  if (!profile.accountCreatedAt) {
+    profile.accountCreatedAt = await getAccountCreatedAt(profile.username);
+    await updateProfile(profile);
+  }
+
+  return profile;
+}
+
 /**
  * Get or create a user's ranking profile
  */
@@ -49,8 +86,11 @@ export async function getOrCreateProfile(username: string): Promise<RankProfile>
   const existing = await redis.get(key);
 
   if (existing) {
-    return JSON.parse(existing);
+    const profile = JSON.parse(existing) as RankProfile;
+    return hydrateProfile(profile);
   }
+
+  const accountCreatedAt = await getAccountCreatedAt(username);
 
   const profile: RankProfile = {
     username,
@@ -61,6 +101,7 @@ export async function getOrCreateProfile(username: string): Promise<RankProfile>
     commentsCount: 0,
     lastSeen: Date.now(),
     joinedAt: Date.now(),
+    accountCreatedAt,
     flairAssigned: 0,
   };
 
@@ -79,7 +120,7 @@ export async function getProfile(username: string): Promise<RankProfile> {
     throw new Error(`Profile not found for user ${username}`);
   }
 
-  return JSON.parse(data);
+  return hydrateProfile(JSON.parse(data) as RankProfile);
 }
 
 /**
@@ -99,15 +140,23 @@ export async function addHeartbeat(username: string): Promise<HeartbeatResponse>
 
   // Dedup: if we have a recent heartbeat, don't add seconds
   if (lastHeartbeat) {
-    const profile = await getProfile(username);
-    return {
-      hubSeconds: profile.hubSeconds,
-      leveledUp: false,
-    };
+    try {
+      const sessionState = JSON.parse(lastHeartbeat) as { expiresAt?: number };
+      if (sessionState.expiresAt && Date.now() < sessionState.expiresAt) {
+        const profile = await getProfile(username);
+        return {
+          hubSeconds: profile.hubSeconds,
+          leveledUp: false,
+        };
+      }
+    } catch {
+      // Treat malformed session data as expired and overwrite it.
+    }
   }
 
-  // Record this heartbeat (simple dedup without TTL for now)
-  await redis.set(sessionKey, Date.now().toString());
+  // Record this heartbeat with a bounded dedup window.
+  const expiresAt = Date.now() + 60_000;
+  await redis.set(sessionKey, JSON.stringify({ recordedAt: Date.now(), expiresAt }));
 
   // Add 30 seconds to the profile
   const profile = await getProfile(username);
@@ -174,9 +223,18 @@ export async function incrementCommentCount(username: string): Promise<number> {
  * Get thresholds (defaults, can be overridden by settings)
  */
 export async function getThresholds(): Promise<RankThresholdConfig> {
-  // TODO: Load from mod settings if available
-  // For now, use defaults
-  return DEFAULT_THRESHOLDS;
+  const settingsJson = await redis.get('rank:thresholds');
+
+  if (!settingsJson) {
+    return DEFAULT_THRESHOLDS;
+  }
+
+  try {
+    return normalizeRankSettings(JSON.parse(settingsJson) as Partial<RankThresholdConfig>);
+  } catch (error) {
+    console.error('Failed to parse rank thresholds:', error);
+    return DEFAULT_THRESHOLDS;
+  }
 }
 
 /**
@@ -197,7 +255,7 @@ export async function calculateLevel(profile: RankProfile): Promise<RankLevel> {
     ) {
       // If this level has an account age requirement, check it
       if (req.accountAgeDays) {
-        const accountAgeDays = Math.floor((Date.now() - profile.joinedAt) / (1000 * 60 * 60 * 24));
+        const accountAgeDays = Math.floor((Date.now() - profile.accountCreatedAt) / (1000 * 60 * 60 * 24));
         if (accountAgeDays < req.accountAgeDays) {
           continue; // Skip this level
         }
@@ -349,11 +407,20 @@ export async function syncCommentCount(username: string): Promise<number> {
 export async function getFeed(): Promise<FeedPost[]> {
   const subreddit = await reddit.getCurrentSubreddit();
   const cacheKey = getFeedCacheKey(getCurrentSubredditName());
+  const cacheMetaKey = getFeedCacheMetaKey(getCurrentSubredditName());
 
   // Try cache first
   const cached = await redis.get(cacheKey);
-  if (cached) {
-    return JSON.parse(cached);
+  const cachedMeta = await redis.get(cacheMetaKey);
+  if (cached && cachedMeta) {
+    try {
+      const expiresAt = Number(cachedMeta);
+      if (Number.isFinite(expiresAt) && Date.now() < expiresAt) {
+        return JSON.parse(cached) as FeedPost[];
+      }
+    } catch {
+      // Fall through to refetch when cache metadata is malformed.
+    }
   }
 
   // Fetch from Reddit
@@ -374,12 +441,10 @@ export async function getFeed(): Promise<FeedPost[]> {
       });
     }
 
-    // Cache for 5 minutes (store with timestamp to check freshness on client)
-    const feedWithTimestamp = JSON.stringify({
-      data: feedPosts,
-      cachedAt: Date.now(),
-    });
-    await redis.set(cacheKey, feedWithTimestamp);
+    // Cache for 5 minutes using a separate expiry marker.
+    const expiresAt = Date.now() + 5 * 60 * 1000;
+    await redis.set(cacheKey, JSON.stringify(feedPosts));
+    await redis.set(cacheMetaKey, expiresAt.toString());
 
     return feedPosts;
   } catch (error) {
@@ -443,9 +508,8 @@ export async function getUserKarma(username: string): Promise<number> {
  */
 export async function getUserAccountAge(username: string): Promise<number> {
   try {
-    const user = await reddit.getUserByUsername(username);
-    if (!user || !user.createdAt || !(user.createdAt instanceof Date)) return 0;
-    return Math.floor((Date.now() - user.createdAt.getTime()) / (1000 * 60 * 60 * 24));
+    const accountCreatedAt = await getAccountCreatedAt(username);
+    return Math.floor((Date.now() - accountCreatedAt) / (1000 * 60 * 60 * 24));
   } catch (error) {
     console.error('Failed to get account age:', error);
     return 0;

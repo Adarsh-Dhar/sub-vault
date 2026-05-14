@@ -48,6 +48,7 @@ export interface RankProfile {
   commentsCount: number;
   lastSeen: number; // timestamp
   joinedAt: number; // timestamp
+  accountCreatedAt: number; // timestamp from Reddit account metadata
   flairAssigned: RankLevel;
 }
 
